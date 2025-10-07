@@ -1,1 +1,2 @@
-from .cli import app  # so future entrypoints can import app
+"""Photo Unifier package."""
+# Intentionally empty to avoid CLI import side-effects.

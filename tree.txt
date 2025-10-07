@@ -1,0 +1,18 @@
+C:\Users\maliq\Desktop\Projects\photo-unifier
+├── src
+│   └── photo_unifier
+│       ├── __init__.py
+│       ├── cli.py
+│       ├── config.py
+│       ├── dedupe.py
+│       ├── embed.py
+│       ├── face.py
+│       ├── importer.py
+│       └── indexer.py
+├── tests
+├── .env.example
+├── .gitignore
+├── print_tree.py
+├── pyproject.toml
+├── README.md
+└── requirements.txt
