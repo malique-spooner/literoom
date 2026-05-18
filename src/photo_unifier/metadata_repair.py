@@ -12,6 +12,7 @@ import numpy as np
 from PIL import ExifTags, Image, ImageFilter, ImageStat
 
 from .metadata import manifest
+from .metadata.snapchat import group_rows_by_day_type, load_history_rows_for_export, row_for_exact_timestamp
 from .utils.location import parse_location_candidate
 from .utils.exiftool import read_core_metadata_batch
 
@@ -553,6 +554,7 @@ def repair_metadata(
     managed_library_dir = Path(managed_library_dir)
     roots = [Path(root) for root in (source_roots or [])]
     apple_csv_index = _build_apple_csv_index(roots)
+    snapchat_rows_by_export: dict[str, list[dict[str, Any]]] = {}
 
     rows = list(manifest.iter_assets_for_metadata_repair(db_path=db_path, limit=limit))
     path_map: dict[str, dict] = {}
@@ -589,6 +591,14 @@ def repair_metadata(
         image_meta: dict = {}
         sidecar_meta: dict = {}
         source_probed = source_readback.get(os.path.normcase(os.path.abspath(str(source_path))), {}) if source_path else {}
+        snapchat_rows = []
+        snapchat_grouped = {}
+        if source_path and source_path.suffix.lower() == ".zip":
+            cache_key = str(source_path.resolve())
+            if cache_key not in snapchat_rows_by_export:
+                snapchat_rows_by_export[cache_key] = load_history_rows_for_export(cache_key)
+            snapchat_rows = snapchat_rows_by_export.get(cache_key) or []
+            snapchat_grouped = group_rows_by_day_type(snapchat_rows) if snapchat_rows else {}
         if source_path and source_path.exists():
             if str(source_path) != str(row.get("source_locator") or row.get("abs_zip") or ""):
                 manifest.update_source_locator(
@@ -608,6 +618,32 @@ def repair_metadata(
         updates: dict = {}
 
         dt_timezone = sidecar_meta.get("timezone_offset") or source_probed.get("timezone_offset") or probed.get("timezone_offset")
+        if row.get("source") == "snapchat" and snapchat_rows:
+            exact_match = None
+            for ts_candidate in (source_probed.get("dt_original"), probed.get("dt_original")):
+                if ts_candidate:
+                    exact_match = row_for_exact_timestamp(snapchat_rows, ts_candidate)
+                    if exact_match:
+                        break
+            if exact_match and exact_match.get("location") and (gps_lat is None or gps_lon is None):
+                updates["gps_lat"] = exact_match["location"]["lat"]
+                updates["gps_lon"] = exact_match["location"]["lon"]
+                updates["gps_alt"] = exact_match["location"].get("alt")
+                updates["gps_source"] = "snapchat_json"
+            if not exact_match:
+                day_key = (str(row.get("orig_filename") or "")[:10], "video" if row.get("media_type") == "video" else "image")
+                candidates = snapchat_grouped.get(day_key) or []
+                if len(candidates) == 1:
+                    exact_match = candidates[0]
+            if exact_match and exact_match.get("captured_at_utc") and not dt_original:
+                updates["dt_original"] = exact_match["captured_at_utc"]
+                updates["dt_source"] = "snapchat_history"
+            if exact_match and exact_match.get("location") and (gps_lat is None or gps_lon is None):
+                updates["gps_lat"] = exact_match["location"]["lat"]
+                updates["gps_lon"] = exact_match["location"]["lon"]
+                updates["gps_alt"] = exact_match["location"].get("alt")
+                updates["gps_source"] = "snapchat_json"
+
         if image_meta.get("dt_original") and (not dt_original or source_dt in WEAK_TIME_SOURCES):
             updates["dt_original"] = image_meta["dt_original"]
             updates["dt_source"] = image_meta.get("dt_source") or "image_exif"

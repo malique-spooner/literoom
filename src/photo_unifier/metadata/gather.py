@@ -18,6 +18,14 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 from zoneinfo import ZoneInfo
 
 from . import manifest
+from .snapchat import (
+    group_rows_by_day_type,
+    is_snapchat_main_media,
+    is_snapchat_overlay,
+    load_history_rows_for_export,
+    looks_like_snapchat_export,
+    order_rows_for_snapchat_group,
+)
 from ..utils.location import parse_location_candidate
 
 
@@ -45,11 +53,15 @@ def _classify_media_type(ext: str) -> str:
 
 def detect_source(path: Path, inner_names_sample: Iterable[str] = ()) -> str:
     name = path.name.lower()
+    if "snapchat" in name or name.startswith("mydata~"):
+        return "snapchat"
     if "icloud" in name or "apple" in name:
         return "apple"
     if "takeout" in name or "google" in name:
         return "google"
     inner = " ".join(n.lower() for n in itertools.islice(inner_names_sample, 20))
+    if "memories_history.json" in inner or "memories_history.html" in inner or "memories/" in inner:
+        return "snapchat"
     if "takeout" in inner or "metadata.json" in inner:
         return "google"
     if "icloud" in inner or "apple" in inner:
@@ -500,12 +512,39 @@ def scan_zip(zip_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict
         src = (source_hint or detect_source(zip_path, (zi.filename for zi in files))).lower()
         side_idx = _build_sidecar_index(files)
         apple_csv_idx = _build_apple_csv_index(files, zp)
+        snapchat_rows = load_history_rows_for_export(str(zip_path)) if src == "snapchat" or looks_like_snapchat_export(zip_path, (zi.filename for zi in files)) else []
+        snapchat_day_type = group_rows_by_day_type(snapchat_rows) if snapchat_rows else {}
+        snapchat_row_map: dict[str, dict[str, Any]] = {}
+        if snapchat_rows:
+            snapchat_grouped_files: dict[tuple[str, str], list[str]] = {}
+            for zi in files:
+                inner = zi.filename
+                ext = Path(inner).suffix.lower()
+                media_type = _classify_media_type(ext)
+                if media_type not in {"image", "video"}:
+                    continue
+                if src == "snapchat" and not is_snapchat_main_media(inner):
+                    continue
+                base_name = Path(inner).name
+                key = (base_name[:10], media_type)
+                snapchat_grouped_files.setdefault(key, []).append(inner)
+            for key, inner_paths in snapchat_grouped_files.items():
+                rows_for_key = snapchat_day_type.get(key) or []
+                if len(rows_for_key) != len(inner_paths):
+                    continue
+                ordered_rows = order_rows_for_snapchat_group(rows_for_key)
+                for inner_path, row in zip(inner_paths, ordered_rows):
+                    snapchat_row_map[inner_path] = row
 
         for zi in files:
             inner = zi.filename
             ext = Path(inner).suffix.lower()
             media_type = _classify_media_type(ext)
             if media_type not in {"image", "video", "raw"}:
+                continue
+            if src == "snapchat" and not is_snapchat_main_media(inner):
+                if is_snapchat_overlay(inner):
+                    continue
                 continue
 
             base_name = Path(inner).name
@@ -517,7 +556,31 @@ def scan_zip(zip_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict
             source_gps = None
 
             apple_local = apple_csv_idx.get(base_name.lower())
-            if src == "apple" or apple_local is not None:
+            if src == "snapchat":
+                day_key = (base_name[:10], "video" if media_type == "video" else "image")
+                exact_match = snapchat_row_map.get(inner)
+                if not exact_match:
+                    candidates = snapchat_day_type.get(day_key) or []
+                    if len(candidates) == 1:
+                        exact_match = candidates[0]
+                if exact_match:
+                    if exact_match.get("captured_at_utc"):
+                        try:
+                            dt_final = datetime.fromisoformat(exact_match["captured_at_utc"]).strftime("%Y-%m-%dT%H:%M:%S")
+                        except Exception:
+                            dt_final = None
+                    else:
+                        dt_final = None
+                    if exact_match.get("location"):
+                        gps_lat = exact_match["location"]["lat"]
+                        gps_lon = exact_match["location"]["lon"]
+                        gps_alt = exact_match["location"].get("alt")
+                        source_gps = "snapchat_json"
+                    source_dt = "snapchat_history"
+                else:
+                    dt_final = None
+                    source_dt = "snapchat_history"
+            elif src == "apple" or apple_local is not None:
                 sc = _find_sidecar(inner, side_idx)
                 if sc:
                     obj = _read_json_from_zip(zp, sc) or {}
@@ -599,6 +662,9 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
             if not path.is_file():
                 continue
         except OSError:
+            continue
+        if path.suffix.lower() == ".zip":
+            yield from scan_zip(path, source_hint=source_hint)
             continue
         ext = path.suffix.lower()
         media_type = _classify_media_type(ext)

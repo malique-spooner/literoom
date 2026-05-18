@@ -16,6 +16,11 @@ _ISO6709_RE = re.compile(
     r"^\s*(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)(?P<alt>[+-]\d+(?:\.\d+)?)?/\s*$"
 )
 
+_SNAPCHAT_LOCATION_RE = re.compile(
+    r"^\s*Latitude,\s*Longitude:\s*(?P<lat>-?\d+(?:\.\d+)?)\s*,\s*(?P<lon>-?\d+(?:\.\d+)?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _coerce_float(value: Any) -> Optional[float]:
     if value in (None, "", False):
@@ -80,6 +85,16 @@ def _parse_coordinate_component(value: Any, *, expect_latitude: bool | None = No
 
 
 def _parse_iso6709(text: str) -> Optional[dict[str, float]]:
+    match = _SNAPCHAT_LOCATION_RE.match(text)
+    if match:
+        lat = _coerce_float(match.group("lat"))
+        lon = _coerce_float(match.group("lon"))
+        if lat is None or lon is None:
+            return None
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return None
+        return {"lat": lat, "lon": lon}
+
     match = _ISO6709_RE.match(text)
     if not match:
         return None
