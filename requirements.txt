@@ -1,10 +1,13 @@
 click
 pillow
 imagehash
-pandas
 python-dateutil
 tqdm
 rich
 pydantic
 pyyaml
 python-json-logger
+timezonefinder
+fastapi
+uvicorn
+opencv-python-headless

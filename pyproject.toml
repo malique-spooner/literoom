@@ -1,14 +1,30 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "photo-unifier"
-version = "0.0.1"
+version = "0.1.0"
 requires-python = ">=3.10"
+dependencies = [
+    "click",
+    "fastapi",
+    "opencv-python-headless",
+    "imagehash",
+    "pillow",
+    "pydantic",
+    "pyyaml",
+    "python-dateutil",
+    "python-json-logger",
+    "rich",
+    "timezonefinder",
+    "tqdm",
+    "uvicorn",
+]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[tool.setuptools.package-dir]
+"" = "src"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["photo_unifier*"]
