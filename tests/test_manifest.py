@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.phase_metadata import manifest
+from photo_unifier.metadata import manifest
 
 
 class ManifestTests(unittest.TestCase):

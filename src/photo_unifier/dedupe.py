@@ -4,8 +4,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..phase_metadata import manifest
-from ..utils.hashing import average_hash, hamming_distance, sha256_file
+from .metadata import manifest
+from .utils.hashing import average_hash, hamming_distance, sha256_file
 
 
 def _canonical_asset(items: List[Dict]) -> str:

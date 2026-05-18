@@ -7,9 +7,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from photo_unifier.metadata_repair import repair_metadata
-from photo_unifier.phase_metadata.gather import _parse_google
-from photo_unifier.phase_dedupe import dedupe
-from photo_unifier.phase_metadata import manifest
+from photo_unifier.metadata.gather import _parse_google
+from photo_unifier import dedupe
+from photo_unifier.metadata import manifest
 from photo_unifier.utils.location import parse_location_candidate
 
 

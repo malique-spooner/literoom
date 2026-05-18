@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.phase_dedupe import dedupe
-from photo_unifier.phase_metadata import manifest
+from photo_unifier import dedupe
+from photo_unifier.metadata import manifest
 
 try:
     from fastapi.testclient import TestClient

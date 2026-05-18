@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from photo_unifier.phase_faces import faces
-from photo_unifier.phase_metadata import manifest
+from photo_unifier import faces
+from photo_unifier.metadata import manifest
 
 try:
     from fastapi.testclient import TestClient
@@ -88,12 +88,12 @@ class FacesTests(unittest.TestCase):
                 manifest.record_thumbnail(db_path, asset["id"], "primary", str(thumb), "READY")
 
             fake_image = __import__("numpy").random.randint(0, 255, size=(100, 100, 3), dtype="uint8")
-            with patch("photo_unifier.phase_faces.faces._detect_boxes", return_value=[(10, 20, 40, 40)]), patch(
-                "photo_unifier.phase_faces.faces._cv2"
+            with patch("photo_unifier.faces._detect_boxes", return_value=[(10, 20, 40, 40)]), patch(
+                "photo_unifier.faces._cv2"
             ) as fake_cv2, patch(
-                "photo_unifier.phase_faces.faces._face_quality", return_value=99.0
+                "photo_unifier.faces._face_quality", return_value=99.0
             ), patch(
-                "photo_unifier.phase_faces.faces._compute_embedding", return_value=[0.1] * 272
+                "photo_unifier.faces._compute_embedding", return_value=[0.1] * 272
             ):
                 fake_cv2.return_value.imread.return_value = fake_image
                 result = faces.detect_faces(db_path, managed)

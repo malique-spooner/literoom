@@ -7,7 +7,7 @@ from typing import Optional
 
 from PIL import Image
 
-from .phase_metadata import manifest
+from .metadata import manifest
 
 
 def _thumbnail_path(derivatives_dir: Path, asset_id: str, kind: str) -> Path:

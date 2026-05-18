@@ -29,6 +29,8 @@ RAW_EXTS = {".dng", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv", ".wmv"}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
+APPLE_CSV_PREFIX = "Photo Details-"
+
 
 def _classify_media_type(ext: str) -> str:
     ext = ext.lower()

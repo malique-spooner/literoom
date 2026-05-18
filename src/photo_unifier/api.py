@@ -23,7 +23,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config, save_config
 from .derivatives import _build_image_thumbnail
-from .phase_metadata import manifest
+from .metadata import manifest
 from .pipeline import run_face_detection, run_full_pipeline
 
 

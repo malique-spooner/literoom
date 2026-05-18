@@ -7,8 +7,8 @@ from typing import Optional, Tuple
 import click
 
 from .config import DEFAULT_CONFIG_PATH, load_config, write_default_config
-from .phase_metadata import manifest
-from .phase_metadata import master
+from .metadata import manifest
+from .metadata import master
 from .pipeline import (
     load_runtime as _load_runtime,
     run_build_derivatives,

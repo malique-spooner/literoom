@@ -11,7 +11,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 from PIL import ExifTags, Image, ImageFilter, ImageStat
 
-from .phase_metadata import manifest
+from .metadata import manifest
 from .utils.location import parse_location_candidate
 from .utils.exiftool import read_core_metadata_batch
 

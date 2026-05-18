@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..phase_metadata import manifest
+from .metadata import manifest
 
 
 def _cv2():

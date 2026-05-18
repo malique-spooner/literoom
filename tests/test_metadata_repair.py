@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from photo_unifier.metadata_repair import repair_metadata
-from photo_unifier.phase_metadata import manifest
+from photo_unifier.metadata import manifest
 
 
 class MetadataRepairTests(unittest.TestCase):

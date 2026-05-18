@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.phase_metadata import gather, manifest
+from photo_unifier.metadata import gather, manifest
 
 
 class GatherTests(unittest.TestCase):

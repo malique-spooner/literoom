@@ -6,9 +6,9 @@ from typing import Optional, Sequence
 from .config import DEFAULT_CONFIG_PATH, load_config
 from .derivatives import build_derivatives
 from .metadata_repair import repair_metadata
-from .phase_dedupe import dedupe
-from .phase_faces import faces
-from .phase_metadata import gather, manifest, master
+from . import dedupe
+from . import faces
+from .metadata import gather, manifest, master
 
 
 def load_runtime(config_path: Path | str = DEFAULT_CONFIG_PATH):
