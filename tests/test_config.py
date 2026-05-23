@@ -16,7 +16,11 @@ class ConfigTests(unittest.TestCase):
 
             self.assertEqual(resolved, config_path.resolve())
             self.assertEqual(config.db_path(resolved), (config_path.parent / ".photo_unifier/manifest.sqlite").resolve())
-            self.assertEqual(config.managed_library_dir(resolved), (config_path.parent / ".photo_unifier/library").resolve())
+            self.assertEqual(config.library_dir(resolved), (config_path.parent / "library").resolve())
+            self.assertEqual(config.previews_dir(resolved), (config_path.parent / "previews").resolve())
+            self.assertIsNotNone(config.tools.exiftool)
+            self.assertIsNotNone(config.tools.ffmpeg)
+            self.assertIsNotNone(config.tools.tesseract)
 
     def test_save_config_persists_updates(self):
         with tempfile.TemporaryDirectory() as tmp:

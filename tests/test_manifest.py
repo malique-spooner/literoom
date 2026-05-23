@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from photo_unifier.metadata import manifest
 
 
@@ -39,7 +41,9 @@ class ManifestTests(unittest.TestCase):
                 "face_identities",
                 "embeddings",
                 "extraction_results",
+                "face_clarifications",
                 "review_decisions",
+                "mutation_history",
             }
             self.assertTrue(expected.issubset(tables))
 
@@ -266,6 +270,274 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(refreshed["dt_original"], "2024-01-01T10:00:00")
             payload = manifest.export_asset_metadata_payload(db_path, asset["id"])
             self.assertEqual(payload["normalized_metadata"]["captured_at"], "2024-01-01T10:00:00")
+
+    def test_set_asset_review_persists_rating_and_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "local",
+                        "abs_zip": "/tmp/image.jpg",
+                        "zip_path": "image.jpg",
+                        "source_kind": "file",
+                        "source_locator": "/tmp/image.jpg",
+                        "source_path": "image.jpg",
+                        "media_type": "image",
+                        "orig_filename": "image.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": 100,
+                        "dt_original": "2024-01-01T10:00:00",
+                        "src_mtime": "2024-01-01T10:00:00",
+                    }
+                ],
+                db_path,
+            )
+            asset = manifest.list_assets(db_path, limit=1)[0]
+
+            manifest.set_asset_review(
+                db_path,
+                asset["id"],
+                user_rating=5,
+                review_state="reviewed",
+                review_score=0.88,
+                favorite=True,
+            )
+
+            updated = manifest.get_asset(db_path, asset["id"])
+            provenance = manifest.list_asset_metadata(db_path, asset["id"])
+
+            self.assertEqual(updated["user_rating"], 5)
+            self.assertEqual(updated["review_state"], "reviewed")
+            self.assertEqual(updated["favorite"], 1)
+            self.assertAlmostEqual(float(updated["review_score"]), 0.88, places=2)
+            self.assertTrue(any(row["field_name"] == "user_rating" for row in provenance))
+            self.assertTrue(any(row["field_name"] == "favorite" for row in provenance))
+
+            history = manifest.get_mutation_history(db_path, limit=4)
+            self.assertEqual(history[0]["action_type"], "SET_ASSET_REVIEW")
+            status = manifest.get_mutation_status(db_path)
+            self.assertTrue(status["can_undo"])
+            self.assertFalse(status["can_redo"])
+
+            manifest.undo_last_mutation(db_path)
+            reverted = manifest.get_asset(db_path, asset["id"])
+            self.assertIsNone(reverted["user_rating"])
+            self.assertIsNone(reverted["review_state"])
+            self.assertEqual(int(reverted["favorite"] or 0), 0)
+            self.assertFalse(manifest.get_mutation_status(db_path)["can_undo"])
+            self.assertTrue(manifest.get_mutation_status(db_path)["can_redo"])
+
+            manifest.redo_last_mutation(db_path)
+            redone = manifest.get_asset(db_path, asset["id"])
+            self.assertEqual(redone["user_rating"], 5)
+            self.assertEqual(redone["review_state"], "reviewed")
+            self.assertEqual(redone["favorite"], 1)
+
+    def test_undo_redo_restores_person_tag_and_duplicate_group(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "local",
+                        "abs_zip": "/tmp/a.jpg",
+                        "zip_path": "a.jpg",
+                        "source_kind": "file",
+                        "source_locator": "/tmp/a.jpg",
+                        "source_path": "a.jpg",
+                        "media_type": "image",
+                        "orig_filename": "a.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": 100,
+                        "dt_original": "2024-01-01T10:00:00",
+                        "src_mtime": "2024-01-01T10:00:00",
+                    },
+                    {
+                        "source": "local",
+                        "abs_zip": "/tmp/b.jpg",
+                        "zip_path": "b.jpg",
+                        "source_kind": "file",
+                        "source_locator": "/tmp/b.jpg",
+                        "source_path": "b.jpg",
+                        "media_type": "image",
+                        "orig_filename": "b.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": 100,
+                        "dt_original": "2024-01-02T10:00:00",
+                        "src_mtime": "2024-01-02T10:00:00",
+                    },
+                ],
+                db_path,
+            )
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10)}
+            a_id = assets["a.jpg"]["id"]
+            b_id = assets["b.jpg"]["id"]
+
+            manifest.add_asset_person(db_path, a_id, "Avery")
+            tagged = manifest.get_asset(db_path, a_id)
+            self.assertIn("Avery", tagged["people_json"])
+            manifest.remove_asset_person(db_path, a_id, "Avery")
+            removed = manifest.get_asset(db_path, a_id)
+            self.assertNotIn("Avery", removed["people_json"])
+            manifest.undo_last_mutation(db_path)
+            untagged = manifest.get_asset(db_path, a_id)
+            self.assertIn("Avery", untagged["people_json"])
+            manifest.redo_last_mutation(db_path)
+            retagged = manifest.get_asset(db_path, a_id)
+            self.assertNotIn("Avery", retagged["people_json"])
+
+            manifest.replace_duplicate_groups(
+                db_path,
+                group_type="EXACT_SHA256",
+                groups=[
+                    {
+                        "canonical_asset_id": a_id,
+                        "items": [
+                            {"asset_id": a_id, "score": 1.0, "rationale": "seed"},
+                            {"asset_id": b_id, "score": 1.0, "rationale": "seed"},
+                        ],
+                    }
+                ],
+            )
+            group_id = manifest.list_duplicate_groups(db_path, group_type="EXACT_SHA256")[0]["id"]
+            manifest.resolve_duplicate_group(db_path, group_id, a_id)
+            group = manifest.list_duplicate_groups(db_path, group_type="EXACT_SHA256")[0]
+            self.assertEqual(group["status"], "RESOLVED")
+            manifest.undo_last_mutation(db_path)
+            group = manifest.list_duplicate_groups(db_path, group_type="EXACT_SHA256")[0]
+            self.assertEqual(group["status"], "OPEN")
+            manifest.redo_last_mutation(db_path)
+            group = manifest.list_duplicate_groups(db_path, group_type="EXACT_SHA256")[0]
+            self.assertEqual(group["status"], "RESOLVED")
+
+    def test_upsert_raw_is_idempotent_for_same_source_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            row = {
+                "source": "local",
+                "abs_zip": "/tmp/image.jpg",
+                "zip_path": "image.jpg",
+                "source_kind": "file",
+                "source_locator": "/tmp/image.jpg",
+                "source_path": "image.jpg",
+                "media_type": "image",
+                "orig_filename": "image.jpg",
+                "orig_ext": ".jpg",
+                "orig_size": 100,
+                "dt_original": "2024-01-01T10:00:00",
+                "src_mtime": "2024-01-01T10:00:00",
+            }
+
+            first = manifest.upsert_raw([row], db_path)
+            second = manifest.upsert_raw([row], db_path)
+            assets = manifest.list_assets(db_path, limit=10, include_hidden=True)
+
+            self.assertEqual(first, 1)
+            self.assertEqual(second, 1)
+            self.assertEqual(len(assets), 1)
+
+    def test_pipeline_health_reports_missing_managed_and_preview_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "local",
+                        "abs_zip": "/tmp/image.jpg",
+                        "zip_path": "image.jpg",
+                        "source_kind": "file",
+                        "source_locator": "/tmp/image.jpg",
+                        "source_path": "image.jpg",
+                        "media_type": "image",
+                        "orig_filename": "image.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": 100,
+                        "dt_original": "2024-01-01T10:00:00",
+                        "src_mtime": "2024-01-01T10:00:00",
+                    }
+                ],
+                db_path,
+            )
+            manifest.plan_targets(db_path)
+
+            health = manifest.get_pipeline_health(db_path)
+            self.assertFalse(health["healthy"])
+            self.assertEqual(health["missing_managed_assets"], 1)
+            self.assertEqual(health["missing_previews"], 1)
+
+    def test_people_albums_duplicate_threshold_and_import_progress_helpers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "managed"
+            managed.mkdir()
+            manifest.init_db(db_path)
+
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "local",
+                        "abs_zip": "/tmp/a.jpg",
+                        "zip_path": "a.jpg",
+                        "source_kind": "file",
+                        "source_locator": "/tmp/a.jpg",
+                        "source_path": "a.jpg",
+                        "media_type": "image",
+                        "orig_filename": "a.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": 100,
+                        "dt_original": "2024-01-01T10:00:00",
+                        "src_mtime": "2024-01-01T10:00:00",
+                    }
+                ],
+                db_path,
+            )
+            manifest.plan_targets(db_path)
+            asset = manifest.list_assets(db_path, limit=1)[0]
+            managed_path = managed / asset["managed_path"]
+            managed_path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (120, 120), color="white").save(managed_path)
+            manifest.mark_copied(db_path, asset["id"], "abc123")
+            manifest.record_thumbnail(db_path, asset["id"], "primary", str(managed_path), "READY", width=120, height=120)
+
+            identity_id = manifest.create_face_identity(db_path, "Avery")
+            manifest.replace_faces_for_asset(
+                db_path,
+                asset["id"],
+                [{"id": "face-a", "bbox": {"x": 1, "y": 2, "w": 20, "h": 20}, "frame_time_ms": 0}],
+            )
+            manifest.assign_face_identity(db_path, "face-a", identity_id)
+            manifest.replace_duplicate_groups(
+                db_path,
+                group_type="NEAR_AHASH",
+                groups=[
+                    {
+                        "canonical_asset_id": asset["id"],
+                        "items": [
+                            {"asset_id": asset["id"], "score": 1.0, "rationale": "reference"},
+                        ],
+                    }
+                ],
+            )
+
+            albums = manifest.list_person_albums(db_path)
+            assets_for_person = manifest.list_assets_for_person(db_path, "Avery")
+            groups = manifest.list_duplicate_groups(db_path, min_score=0.9, group_type="NEAR_AHASH")
+            import_progress = manifest.get_import_progress(db_path)
+
+            self.assertEqual(albums[0]["label"], "Avery")
+            self.assertEqual(assets_for_person[0]["id"], asset["id"])
+            self.assertEqual(len(groups), 1)
+            self.assertGreater(import_progress["completion_pct"], 0)
 
 
 if __name__ == "__main__":

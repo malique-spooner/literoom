@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+*.egg-info/
+photo-unifier.local.yaml
 .DS_Store
 ._*
 Thumbs.db

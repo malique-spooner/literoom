@@ -1,13 +1,20 @@
 # Photo Unifier
 
-Photo Unifier is a local-first media archive pipeline and local web app. It ingests photos and videos from folders, drives, and ZIP takeouts into a SQLite-backed catalog, plans a normalized managed library, copies canonical assets without touching originals, repairs metadata, prepares previews, and exposes review workflows through a local browser UI.
+Photo Unifier is a local-first media archive pipeline and local web app. It ingests photos and videos from folders, drives, and ZIP takeouts into a SQLite-backed catalog, plans a clean library, copies canonical assets without touching originals, repairs metadata, prepares previews, and exposes review workflows through a local browser UI.
 
 ## Current Snapshot
 
 The project now has a cleaner separation between code and media:
 
 - Code lives in `/Users/maliquespooner/Desktop/Coding/photo-unifier`
-- Media and runtime data live on the SSD under `/Volumes/Extreme SSD/MSp/Photo Unifier`
+- Media and runtime data live on the external drive under `/Volumes/Extreme SSD/MSp/Photo Unifier`
+- The external drive layout is:
+  - `imports/` for new media
+  - `library/` for the organized final copies
+  - `previews/` for thumbnails and video stills
+  - `logs/` for run logs
+  - `tmp/` for temporary files
+- The SQLite database still lives under `.photo_unifier/manifest.sqlite`
 - The old SSD code tree has been removed, so the Desktop repo is the source of truth
 - The `src` tree is simplified around `metadata/`, `faces.py`, `dedupe.py`, and `utils/` instead of the old `phase_*` naming
 
@@ -23,14 +30,14 @@ Recent pilot runs on small and widened samples completed cleanly, with strong ti
 
 ## What Exists Now
 
-- SQLite is the source of truth for assets, jobs, managed copies, hashes, thumbnails, duplicates, faces, embeddings, and extraction records.
+- SQLite is the source of truth for assets, jobs, library copies, hashes, previews, duplicates, faces, embeddings, and extraction records.
 - Ingest supports Apple/Google ZIP takeouts plus loose files and directories.
-- Managed-library planning is deterministic and resumable.
-- Managed-library builds copy assets into a normalized destination and attempt metadata embedding with `exiftool`.
-- Derivative generation creates image thumbnails and video preview frames when `ffmpeg` is available.
+- Library planning is deterministic and resumable.
+- Library builds copy assets into the library destination and attempt metadata embedding with `exiftool`.
+- Preview generation creates image thumbnails and video preview frames with `ffmpeg`.
 - Metadata repair normalizes timestamps, location data, screenshots, and provider-agnostic sidecars.
 - Exact duplicate detection and first-pass face detection are implemented.
-- A local API and browser UI exist for status, jobs, assets, duplicates, and people review.
+- A local API and browser UI exist for Library, People, Review, and System navigation.
 
 ## Working Approach
 
@@ -45,74 +52,122 @@ That approach matters most for time, GPS, and people data, where false positives
 
 ## Quick Start
 
-1. Use Python `3.11.9` and install dependencies:
+0. Make sure the native image helper is installed:
 
    ```bash
-   python -m pip install -r requirements.txt
+   brew install libvips
+   ```
+
+1. Create a virtual environment, then install the package in editable mode:
+
+   ```bash
+   python -m venv .venv
+   ./.venv/bin/pip install -e .
+   ```
+
+   Or use:
+
+   ```bash
+   make setup
    ```
 
 2. Write a default config:
 
    ```bash
-   python -m photo_unifier.cli init-config
+   ./.venv/bin/python -m photo_unifier.cli init-config
    ```
 
 3. Ingest sources:
 
    ```bash
-   python -m photo_unifier.cli ingest /path/to/takeout.zip /path/to/media/folder
+   ./.venv/bin/python -m photo_unifier.cli ingest /path/to/takeout.zip /path/to/media/folder
    ```
 
-4. Plan and build the managed library:
+4. Plan and build the library:
 
    ```bash
-   python -m photo_unifier.cli plan-library
-   python -m photo_unifier.cli build-library
-   python -m photo_unifier.cli build-derivatives
+   ./.venv/bin/python -m photo_unifier.cli plan-library
+   ./.venv/bin/python -m photo_unifier.cli build-library
+   ./.venv/bin/python -m photo_unifier.cli build-previews
+   ./.venv/bin/python -m photo_unifier.cli extract-content
    ```
 
 5. Inspect status:
 
    ```bash
-   python -m photo_unifier.cli status
-   python -m photo_unifier.cli jobs
+   ./.venv/bin/python -m photo_unifier.cli status
+   ./.venv/bin/python -m photo_unifier.cli jobs
+   ./.venv/bin/python -m photo_unifier.cli doctor
    ```
 
 6. Run the local API and app:
 
    ```bash
-   python -m photo_unifier.cli serve-api --host 127.0.0.1 --port 8000
+   ./.venv/bin/python -m photo_unifier.cli serve-api --host 127.0.0.1 --port 8000
    ```
 
    Then open:
 
    - `http://127.0.0.1:8000/`
    - `http://127.0.0.1:8000/app/assets`
-   - `http://127.0.0.1:8000/app/duplicates`
-   - `http://127.0.0.1:8000/app/faces`
+   - `http://127.0.0.1:8000/app/people`
+   - `http://127.0.0.1:8000/app/review`
+   - `http://127.0.0.1:8000/app/system`
+   - `http://127.0.0.1:8000/healthz`
+
+7. Run tests:
+
+   ```bash
+   ./.venv/bin/python -m unittest discover -s tests -t . -q
+   ```
+
+   Or use:
+
+   ```bash
+   make test
+   ```
+
+## Convenience Commands
+
+Once the virtual environment is created, the `Makefile` gives you short commands for the common workflows:
+
+- `make doctor`
+- `make status`
+- `make jobs`
+- `make serve`
+- `make test`
 
 ## Config
 
-Default config path: `.photo_unifier/config.yaml`
+Default config path: `photo-unifier.local.yaml`
 
 The config controls:
 
 - workspace root
 - source paths
 - SQLite database location
-- managed library destination
-- derivative output directory
-- tool paths for `exiftool` and `ffmpeg`
+- library destination
+- preview output directory
+- the locked Photo Unifier stack:
+  - `exiftool`
+  - `ffmpeg`
+  - `libvips`
+  - `PaddleOCR`
+  - `Whisper`
+  - `YuNet`
+  - `InsightFace`
+  - `YOLO`
+  - `OpenCLIP`
+  - `SQLite FTS + vector search`
 - batch size, workers, naming template, and preview settings
 
 ## Current Gaps
 
-This repo now has a working ingest/library/review foundation, but the following are still not fully implemented:
+This repo now has a working ingest/library/review foundation, and the intelligence layer is now implemented. The remaining work is mostly in review polish, release hardening, and deeper UX refinement:
 
-- near-duplicate detection
-- face clustering and identity propagation
-- speech/OCR/scene extraction
-- embeddings and semantic ranking
 - a more polished Apple/Google-Photos-style browsing experience
+- richer review workflows for duplicates, people, and cleanup queues
+- additional smoke tests and pilot validation on large real libraries
+- more enrichment support for the locked media stack when packages are installed
 
-The remaining work is mostly in the intelligence and polish layers rather than the original CSV-era foundation.
+The remaining work is now primarily polish and operational hardening rather than core intelligence gaps.

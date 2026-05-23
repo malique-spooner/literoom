@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -11,23 +12,27 @@ try:
 except Exception:  # pragma: no cover - optional dependency fallback
     yaml = None  # type: ignore[assignment]
 
+from .tooling import discover_default_binary_paths
 
-DEFAULT_CONFIG_PATH = Path(".photo_unifier/config.yaml")
+
+DEFAULT_CONFIG_PATH = Path("photo-unifier.local.yaml")
 
 
 @dataclass
 class WorkspacePaths:
     db_path: str = ".photo_unifier/manifest.sqlite"
-    managed_library_dir: str = ".photo_unifier/library"
-    derivatives_dir: str = ".photo_unifier/derived"
-    logs_dir: str = ".photo_unifier/logs"
-    temp_dir: str = ".photo_unifier/tmp"
+    managed_library_dir: str = "library"
+    derivatives_dir: str = "previews"
+    logs_dir: str = "logs"
+    temp_dir: str = "tmp"
 
 
 @dataclass
 class ToolPaths:
     exiftool: Optional[str] = None
     ffmpeg: Optional[str] = None
+    tesseract: Optional[str] = None
+    vips: Optional[str] = None
     whisper_model: Optional[str] = None
     clip_model: Optional[str] = None
     face_model: Optional[str] = None
@@ -77,14 +82,23 @@ class AppConfig:
     def managed_library_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.managed_library_dir)
 
+    def library_dir(self, config_path: Path) -> Path:
+        return self.managed_library_dir(config_path)
+
     def derivatives_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.derivatives_dir)
+
+    def previews_dir(self, config_path: Path) -> Path:
+        return self.derivatives_dir(config_path)
 
     def logs_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.logs_dir)
 
     def temp_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.temp_dir)
+
+    def cache_dir(self, config_path: Path) -> Path:
+        return self.resolve_path(config_path, ".photo_unifier/cache")
 
     def resolved_sources(self, config_path: Path, extra_sources: Optional[Iterable[str]] = None) -> List[Path]:
         raw = list(self.sources)
@@ -100,18 +114,61 @@ class AppConfig:
 
     def ensure_workspace_dirs(self, config_path: Path) -> None:
         self.db_path(config_path).parent.mkdir(parents=True, exist_ok=True)
-        self.managed_library_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.derivatives_dir(config_path).mkdir(parents=True, exist_ok=True)
+        self.library_dir(config_path).mkdir(parents=True, exist_ok=True)
+        self.previews_dir(config_path).mkdir(parents=True, exist_ok=True)
         self.logs_dir(config_path).mkdir(parents=True, exist_ok=True)
         self.temp_dir(config_path).mkdir(parents=True, exist_ok=True)
+        self.cache_dir(config_path).mkdir(parents=True, exist_ok=True)
+
+    def prepare_runtime_environment(self, config_path: Path) -> None:
+        cache_root = self.cache_dir(config_path)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        cache_dirs = {
+            "XDG_CACHE_HOME": cache_root,
+            "MPLCONFIGDIR": cache_root / "matplotlib",
+            "PADDLE_PDX_CACHE_HOME": cache_root / "paddlex",
+            "HF_HOME": cache_root / "huggingface",
+            "TORCH_HOME": cache_root / "torch",
+            "YOLO_CONFIG_DIR": cache_root / "ultralytics",
+        }
+        for key, path in cache_dirs.items():
+            path.mkdir(parents=True, exist_ok=True)
+            os.environ.setdefault(key, str(path))
+        os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+        os.environ.setdefault("PADDLEOCR_DISABLE_AUTO_LOGGING_CONFIG", "1")
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        paths = payload.get("paths", {})
+        if isinstance(paths, dict):
+            paths["library_dir"] = paths.pop("managed_library_dir", paths.get("library_dir"))
+            paths["previews_dir"] = paths.pop("derivatives_dir", paths.get("previews_dir"))
+        return payload
 
 
 def _merge_dataclass(cls, raw: Dict[str, Any]):
     valid = {key: raw[key] for key in raw if key in cls.__dataclass_fields__}
     return cls(**valid)
+
+
+def _normalize_workspace_paths(path_payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(path_payload)
+    legacy_map = {
+        ".photo_unifier/library": "library",
+        ".photo_unifier/derived": "previews",
+        ".photo_unifier/logs": "logs",
+        ".photo_unifier/tmp": "tmp",
+    }
+    for old_value, new_value in legacy_map.items():
+        if normalized.get("managed_library_dir") == old_value:
+            normalized["managed_library_dir"] = new_value
+        if normalized.get("derivatives_dir") == old_value:
+            normalized["derivatives_dir"] = new_value
+        if normalized.get("logs_dir") == old_value:
+            normalized["logs_dir"] = new_value
+        if normalized.get("temp_dir") == old_value:
+            normalized["temp_dir"] = new_value
+    return normalized
 
 
 def _simple_scalar(value: str) -> Any:
@@ -217,7 +274,18 @@ def _fallback_dump_scalar(value: Any) -> str:
 
 
 def default_config() -> AppConfig:
-    return AppConfig()
+    tool_paths = discover_default_binary_paths()
+    return AppConfig(
+        tools=ToolPaths(
+            exiftool=tool_paths.get("exiftool"),
+            ffmpeg=tool_paths.get("ffmpeg"),
+            tesseract=tool_paths.get("tesseract"),
+            vips=tool_paths.get("libvips"),
+            whisper_model="base",
+            clip_model="open_clip:ViT-B-32",
+            face_model="opencv_haar_clustered",
+        )
+    )
 
 
 def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, Path]:
@@ -231,14 +299,25 @@ def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfi
         payload = yaml.safe_load(raw_text) or {}
     else:
         payload = _fallback_load_config(raw_text)
+    path_payload = dict(payload.get("paths", {}) or {})
+    if "library_dir" in path_payload and "managed_library_dir" not in path_payload:
+        path_payload["managed_library_dir"] = path_payload["library_dir"]
+    if "previews_dir" in path_payload and "derivatives_dir" not in path_payload:
+        path_payload["derivatives_dir"] = path_payload["previews_dir"]
+    path_payload = _normalize_workspace_paths(path_payload)
     cfg = AppConfig(
         workspace_root=payload.get("workspace_root", "."),
         sources=list(payload.get("sources", [])),
-        paths=_merge_dataclass(WorkspacePaths, payload.get("paths", {})),
+        paths=_merge_dataclass(WorkspacePaths, path_payload),
         tools=_merge_dataclass(ToolPaths, payload.get("tools", {})),
         pipeline=_merge_dataclass(PipelineConfig, payload.get("pipeline", {})),
         thresholds=_merge_dataclass(ThresholdConfig, payload.get("thresholds", {})),
     )
+    defaults = default_config().tools
+    for field_name in ToolPaths.__dataclass_fields__:
+        current = getattr(cfg.tools, field_name)
+        if current in (None, ""):
+            setattr(cfg.tools, field_name, getattr(defaults, field_name))
     return cfg, path
 
 

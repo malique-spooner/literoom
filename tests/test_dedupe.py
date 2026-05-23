@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image, ImageDraw
+
 from photo_unifier import dedupe
 from photo_unifier.metadata import manifest
 
@@ -29,8 +31,8 @@ class DedupeTests(unittest.TestCase):
                     "sources: []",
                     "paths:",
                     f"  db_path: {db_path}",
-                    f"  managed_library_dir: {managed}",
-                    f"  derivatives_dir: {derived}",
+                    f"  library_dir: {managed}",
+                    f"  previews_dir: {derived}",
                     f"  logs_dir: {root / 'logs'}",
                     f"  temp_dir: {root / 'tmp'}",
                 ]
@@ -201,6 +203,54 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(len(visible), 1)
             self.assertEqual(len(all_items), 2)
 
+    def test_near_dedupe_uses_time_and_visual_similarity_for_small_variants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            managed.mkdir()
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx, color in enumerate(["white", "whitesmoke"]):
+                source = root / f"variant-{idx}.jpg"
+                img = Image.new("RGB", (800, 800), color=color)
+                draw = ImageDraw.Draw(img)
+                draw.rectangle([48 + idx * 2, 48, 248 + idx * 2, 248], fill="black")
+                img.save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-02T03:04:05",
+                        "src_mtime": "2024-01-02T03:04:05",
+                    }
+                )
+
+            manifest.upsert_raw(rows, db_path)
+            manifest.plan_targets(db_path)
+            assets = list(manifest.iter_for_master(db_path))
+            for row in assets:
+                path = managed / row["managed_path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                source = root / row["orig_filename"]
+                path.write_bytes(source.read_bytes())
+                manifest.mark_copied(db_path, row["id"], "abc123")
+
+            result = dedupe.run_near(db_path, managed, max_distance=8)
+            groups = manifest.list_duplicate_groups(db_path)
+
+            self.assertEqual(result["groups"], 1)
+            self.assertEqual(len(groups), 1)
+
     def test_asset_detail_page_renders(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -249,7 +299,7 @@ class DedupeTests(unittest.TestCase):
             response = client.get(f"/app/assets/{asset['id']}")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Normalized Metadata", response.text)
+            self.assertIn("Quick Rank", response.text)
             self.assertIn("Open File", response.text)
 
     def test_video_asset_detail_renders_inline_viewer_and_inline_route(self):
@@ -329,8 +379,8 @@ class DedupeTests(unittest.TestCase):
                     "workspace_root": str(root),
                     "sources_text": "/Volumes/Extreme SSD/MSp/Camera\n/Volumes/Extreme SSD/MSp/Camera/Master",
                     "db_path_value": str(db_path),
-                    "managed_library_dir_value": str(managed),
-                    "derivatives_dir_value": str(derived),
+                    "library_dir_value": str(managed),
+                    "previews_dir_value": str(derived),
                     "logs_dir_value": str(root / "logs"),
                     "temp_dir_value": str(root / "tmp"),
                     "batch_size": 123,

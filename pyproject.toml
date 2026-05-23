@@ -20,6 +20,13 @@ dependencies = [
     "timezonefinder",
     "tqdm",
     "uvicorn",
+    "openai-whisper",
+    "open_clip_torch",
+    "ultralytics",
+    "insightface",
+    "paddleocr",
+    "onnxruntime",
+    "pi-heif",
 ]
 
 [tool.setuptools.package-dir]

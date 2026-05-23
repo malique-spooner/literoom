@@ -34,8 +34,8 @@ class FacesTests(unittest.TestCase):
                     "sources: []",
                     "paths:",
                     f"  db_path: {db_path}",
-                    f"  managed_library_dir: {managed}",
-                    f"  derivatives_dir: {derived}",
+                    f"  library_dir: {managed}",
+                    f"  previews_dir: {derived}",
                     f"  logs_dir: {root / 'logs'}",
                     f"  temp_dir: {root / 'tmp'}",
                 ]
@@ -123,7 +123,8 @@ class FacesTests(unittest.TestCase):
             )
             self.assertEqual(reject.status_code, 303)
             visible = manifest.list_faces(db_path, limit=10)
-            self.assertEqual(visible, [])
+            self.assertEqual(len(visible), 1)
+            self.assertNotEqual(visible[0]["id"], updated["id"])
 
     def test_cluster_faces_requires_multiple_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,6 +221,74 @@ class FacesTests(unittest.TestCase):
             self.assertEqual(result["clusters_created"], 1)
             self.assertEqual(len(identities), 1)
             self.assertEqual({row["identity_id"] for row in labeled_faces}, {identities[0]["id"]})
+
+    def test_cluster_faces_propagates_confirmed_identity_to_asset_people(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(2):
+                locator = root / f"person-{idx}.jpg"
+                locator.write_bytes(b"same-bytes")
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(locator),
+                        "zip_path": locator.name,
+                        "source_kind": "file",
+                        "source_locator": str(locator),
+                        "source_path": locator.name,
+                        "media_type": "image",
+                        "orig_filename": locator.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": 10,
+                        "dt_original": "2024-01-02T03:04:05",
+                        "src_mtime": "2024-01-02T03:04:05",
+                    }
+                )
+
+            manifest.upsert_raw(rows, db_path)
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10, include_hidden=True)}
+            vector = [0.2] * 168
+            face_a = "face-a"
+            face_b = "face-b"
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["person-0.jpg"]["id"],
+                [{"id": face_a, "bbox": {}, "embedding_vector": vector}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["person-0.jpg"]["id"],
+                face_id=face_a,
+                vector=vector,
+            )
+            identity_id = manifest.create_face_identity(db_path, "Ethan", status="CONFIRMED")
+            manifest.assign_face_identity(db_path, face_a, identity_id)
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["person-1.jpg"]["id"],
+                [{"id": face_b, "bbox": {}, "embedding_vector": vector}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["person-1.jpg"]["id"],
+                face_id=face_b,
+                vector=vector,
+            )
+
+            result = faces.cluster_faces(db_path, similarity_threshold=0.95)
+            updated_asset = manifest.get_asset(db_path, assets["person-1.jpg"]["id"])
+            labeled_faces = {row["id"]: row for row in manifest.list_faces(db_path, limit=10, include_rejected=True)}
+
+            self.assertEqual(result["assigned"], 1)
+            self.assertEqual(labeled_faces[face_b]["identity_label"], "Ethan")
+            self.assertIn("Ethan", updated_asset["people_json"])
 
 
 if __name__ == "__main__":

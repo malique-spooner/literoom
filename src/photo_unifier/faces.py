@@ -266,7 +266,9 @@ def cluster_faces(db_path: Path, *, similarity_threshold: float = 0.9) -> Dict[s
         norm = float(np.linalg.norm(mean)) or 1.0
         return (mean / norm).astype("float32").tolist()
 
-    assigned = created = 0
+    assigned = created = clarified = 0
+    identities_to_propagate: set[str] = set()
+    clarification_threshold = max(0.8, similarity_threshold - 0.08)
 
     unmatched: List[Dict[str, object]] = []
     for item in embeddings:
@@ -291,8 +293,22 @@ def cluster_faces(db_path: Path, *, similarity_threshold: float = 0.9) -> Dict[s
                 best_identity,
                 labeled=identity_index.get(best_identity, {}).get("status") == "CONFIRMED",
             )
+            manifest.resolve_face_clarification(db_path, item["face_id"], status="RESOLVED")
             centroids.setdefault(best_identity, []).append(item["vector"])
             assigned += 1
+            if identity_index.get(best_identity, {}).get("status") == "CONFIRMED":
+                identities_to_propagate.add(best_identity)
+            continue
+        if best_identity and best_score >= clarification_threshold:
+            manifest.save_face_clarification(
+                db_path,
+                item["face_id"],
+                suggested_identity_id=best_identity,
+                suggested_label=identity_index.get(best_identity, {}).get("label"),
+                score=best_score,
+                rationale=f"similarity {best_score:.3f} below auto-assign threshold",
+            )
+            clarified += 1
             continue
         unmatched.append(item)
 
@@ -342,9 +358,14 @@ def cluster_faces(db_path: Path, *, similarity_threshold: float = 0.9) -> Dict[s
             identity_index = {identity["id"]: identity for identity in identities}
             for item in cluster_items:
                 manifest.update_face_cluster(db_path, item["face_id"], identity_id, labeled=False)
+                manifest.resolve_face_clarification(db_path, item["face_id"], status="RESOLVED")
                 centroids.setdefault(identity_id, []).append(item["vector"])
             created += 1
-    return {"assigned": assigned, "clusters_created": created}
+
+    for identity_id in identities_to_propagate:
+        manifest.apply_identity_to_assets(db_path, identity_id)
+
+    return {"assigned": assigned, "clusters_created": created, "clarified": clarified}
 
 
 def detect_faces(

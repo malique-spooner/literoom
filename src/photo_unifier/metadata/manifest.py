@@ -74,6 +74,11 @@ def init_db(db_path: Path) -> None:
               dt_original TEXT,
               gps_lat REAL, gps_lon REAL, gps_alt REAL,
               title TEXT, description TEXT,
+              user_rating INTEGER,
+              review_score REAL,
+              review_state TEXT,
+              favorite INTEGER DEFAULT 0,
+              ranked_at TEXT,
               keywords_json TEXT, people_json TEXT,
               live_group_id TEXT, burst_id TEXT,
               status TEXT DEFAULT 'NEW',
@@ -198,6 +203,17 @@ def init_db(db_path: Path) -> None:
               created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS face_clarifications (
+              face_id TEXT PRIMARY KEY REFERENCES faces(id) ON DELETE CASCADE,
+              suggested_identity_id TEXT REFERENCES face_identities(id),
+              suggested_label TEXT,
+              score REAL,
+              rationale TEXT,
+              status TEXT NOT NULL DEFAULT 'OPEN',
+              created_at TEXT NOT NULL,
+              resolved_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS metadata_fields (
               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
               field_name TEXT NOT NULL,
@@ -230,6 +246,26 @@ def init_db(db_path: Path) -> None:
               value_json TEXT,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS mutation_history (
+              seq INTEGER PRIMARY KEY AUTOINCREMENT,
+              action_type TEXT NOT NULL,
+              target_id TEXT,
+              summary TEXT,
+              before_json TEXT NOT NULL,
+              after_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              undone_at TEXT,
+              redone_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS saved_searches (
+              id TEXT PRIMARY KEY,
+              label TEXT NOT NULL,
+              params_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             """
         )
         con.commit()
@@ -252,6 +288,11 @@ def _ensure_columns(db_path: Path) -> None:
             ("managed_asset_id", "TEXT"),
             ("target_relpath", "TEXT"),
             ("target_filename", "TEXT"),
+            ("user_rating", "INTEGER"),
+            ("review_score", "REAL"),
+            ("review_state", "TEXT"),
+            ("favorite", "INTEGER DEFAULT 0"),
+            ("ranked_at", "TEXT"),
             ("sha256", "TEXT"),
             ("last_embed_hash", "TEXT"),
             ("exiftool_version", "TEXT"),
@@ -307,6 +348,10 @@ def _coerce_list(value: Any) -> List[Any]:
         except Exception:
             return [value]
     return [value]
+
+
+def _coerce_str_list(value: Any) -> List[str]:
+    return [str(item) for item in _coerce_list(value) if str(item).strip()]
 
 
 def canonical_metadata_standard(media_type: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -593,9 +638,10 @@ def upsert_raw(rows: List[Dict[str, Any]], db_path: Path, job_id: Optional[str] 
                   id, source, abs_zip, zip_path, source_kind, source_root, source_locator, source_path,
                   media_type, orig_filename, orig_ext, orig_size, dt_original,
                   gps_lat, gps_lon, gps_alt, title, description,
+                  user_rating, review_score, review_state, favorite, ranked_at,
                   keywords_json, people_json, live_group_id, burst_id, status, src_mtime,
                   source_dt, source_gps, last_updated
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                   source_kind     = COALESCE(excluded.source_kind, assets.source_kind),
                   source_root     = COALESCE(excluded.source_root, assets.source_root),
@@ -611,6 +657,11 @@ def upsert_raw(rows: List[Dict[str, Any]], db_path: Path, job_id: Optional[str] 
                   gps_alt         = COALESCE(excluded.gps_alt, assets.gps_alt),
                   title           = COALESCE(excluded.title, assets.title),
                   description     = COALESCE(excluded.description, assets.description),
+                  user_rating     = COALESCE(excluded.user_rating, assets.user_rating),
+                  review_score    = COALESCE(excluded.review_score, assets.review_score),
+                  review_state    = COALESCE(excluded.review_state, assets.review_state),
+                  favorite        = COALESCE(excluded.favorite, assets.favorite),
+                  ranked_at       = COALESCE(excluded.ranked_at, assets.ranked_at),
                   keywords_json   = CASE WHEN excluded.keywords_json IS NOT NULL AND excluded.keywords_json <> '[]' THEN excluded.keywords_json ELSE assets.keywords_json END,
                   people_json     = CASE WHEN excluded.people_json IS NOT NULL AND excluded.people_json <> '[]' THEN excluded.people_json ELSE assets.people_json END,
                   live_group_id   = COALESCE(excluded.live_group_id, assets.live_group_id),
@@ -640,6 +691,11 @@ def upsert_raw(rows: List[Dict[str, Any]], db_path: Path, job_id: Optional[str] 
                     r.get("gps_alt"),
                     r.get("title"),
                     r.get("description"),
+                    r.get("user_rating"),
+                    r.get("review_score"),
+                    r.get("review_state"),
+                    int(bool(r.get("favorite"))) if r.get("favorite") is not None else 0,
+                    r.get("ranked_at"),
                     json.dumps(r.get("keywords") or []),
                     json.dumps(r.get("people") or []),
                     r.get("live_group_id"),
@@ -1212,6 +1268,580 @@ def set_metadata_field(
         con.close()
 
 
+def _capture_asset_mutation_snapshot(
+    con: sqlite3.Connection,
+    asset_id: str,
+    *,
+    columns: List[str],
+    field_names: List[str],
+) -> Dict[str, Any]:
+    select_cols = ["id", "last_updated"]
+    for column in columns:
+        if column not in select_cols:
+            select_cols.append(column)
+    asset_row = con.execute(
+        f"SELECT {', '.join(select_cols)} FROM assets WHERE id=?",
+        (asset_id,),
+    ).fetchone()
+    if not asset_row:
+        raise ValueError("asset not found")
+    metadata_rows: List[Dict[str, Any]] = []
+    if field_names:
+        placeholders = ", ".join("?" for _ in field_names)
+        rows = con.execute(
+            f"""
+            SELECT asset_id, field_name, value_json, value_text, value_real,
+                   source_name, source_field, is_canonical, confidence, created_at, updated_at
+            FROM metadata_fields
+            WHERE asset_id=? AND field_name IN ({placeholders})
+            """,
+            (asset_id, *field_names),
+        ).fetchall()
+        metadata_rows = [dict(row) for row in rows]
+    return {
+        "type": "asset_state",
+        "asset_id": asset_id,
+        "columns": columns,
+        "field_names": field_names,
+        "asset": dict(asset_row),
+        "metadata_rows": metadata_rows,
+    }
+
+
+def _capture_duplicate_group_snapshot(con: sqlite3.Connection, group_id: str) -> Dict[str, Any]:
+    group = con.execute(
+        "SELECT * FROM duplicate_groups WHERE id=?",
+        (group_id,),
+    ).fetchone()
+    if not group:
+        raise ValueError("duplicate group not found")
+    items = con.execute(
+        "SELECT * FROM duplicate_items WHERE group_id=? ORDER BY asset_id",
+        (group_id,),
+    ).fetchall()
+    return {
+        "type": "duplicate_group_state",
+        "group_id": group_id,
+        "group": dict(group),
+        "items": [dict(row) for row in items],
+    }
+
+
+def _restore_asset_snapshot(con: sqlite3.Connection, snapshot: Dict[str, Any]) -> None:
+    asset = snapshot.get("asset") or {}
+    asset_id = snapshot.get("asset_id") or asset.get("id")
+    if not asset_id:
+        raise ValueError("asset snapshot missing asset id")
+    columns = list(snapshot.get("columns") or [])
+    if not columns:
+        return
+    updates = []
+    params: List[Any] = []
+    for column in columns:
+        updates.append(f"{column}=?")
+        params.append(asset.get(column))
+    params.append(asset_id)
+    con.execute(f"UPDATE assets SET {', '.join(updates)} WHERE id=?", params)
+    field_names = list(snapshot.get("field_names") or [])
+    if field_names:
+        placeholders = ", ".join("?" for _ in field_names)
+        con.execute(
+            f"DELETE FROM metadata_fields WHERE asset_id=? AND field_name IN ({placeholders})",
+            (asset_id, *field_names),
+        )
+        for row in snapshot.get("metadata_rows") or []:
+            con.execute(
+                """
+                INSERT INTO metadata_fields (
+                  asset_id, field_name, value_json, value_text, value_real,
+                  source_name, source_field, is_canonical, confidence, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["asset_id"],
+                    row["field_name"],
+                    row["value_json"],
+                    row["value_text"],
+                    row["value_real"],
+                    row["source_name"],
+                    row["source_field"],
+                    row["is_canonical"],
+                    row["confidence"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+
+
+def _restore_duplicate_group_snapshot(con: sqlite3.Connection, snapshot: Dict[str, Any]) -> None:
+    group = snapshot.get("group") or {}
+    group_id = snapshot.get("group_id") or group.get("id")
+    if not group_id:
+        raise ValueError("duplicate group snapshot missing group id")
+    con.execute("DELETE FROM duplicate_items WHERE group_id=?", (group_id,))
+    con.execute("DELETE FROM duplicate_groups WHERE id=?", (group_id,))
+    con.execute(
+        """
+        INSERT INTO duplicate_groups (id, group_type, status, canonical_asset_id, created_at, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            group["id"],
+            group["group_type"],
+            group["status"],
+            group["canonical_asset_id"],
+            group["created_at"],
+            group.get("resolved_at"),
+        ),
+    )
+    for row in snapshot.get("items") or []:
+        con.execute(
+            """
+            INSERT INTO duplicate_items (group_id, asset_id, score, rationale, keep_decision)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                row["group_id"],
+                row["asset_id"],
+                row["score"],
+                row["rationale"],
+                row["keep_decision"],
+            ),
+        )
+
+
+def _mutation_snapshot_for_review(con: sqlite3.Connection, asset_id: str) -> Dict[str, Any]:
+    return _capture_asset_mutation_snapshot(
+        con,
+        asset_id,
+        columns=["user_rating", "review_state", "review_score", "favorite", "ranked_at", "last_updated"],
+        field_names=["user_rating", "review_state", "review_score", "favorite"],
+    )
+
+
+def _mutation_snapshot_for_people(con: sqlite3.Connection, asset_id: str) -> Dict[str, Any]:
+    return _capture_asset_mutation_snapshot(
+        con,
+        asset_id,
+        columns=["people_json", "last_updated"],
+        field_names=["people"],
+    )
+
+
+def _write_mutation_history(
+    con: sqlite3.Connection,
+    *,
+    action_type: str,
+    target_id: Optional[str],
+    summary: str,
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+) -> None:
+    con.execute("DELETE FROM mutation_history WHERE undone_at IS NOT NULL")
+    con.execute(
+        """
+        INSERT INTO mutation_history (
+          action_type, target_id, summary, before_json, after_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action_type,
+            target_id,
+            summary,
+            json.dumps(before),
+            json.dumps(after),
+            utcnow_iso(),
+        ),
+    )
+
+
+def get_mutation_history(db_path: Path, *, limit: int = 8) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT *
+            FROM mutation_history
+            ORDER BY seq DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def get_mutation_status(db_path: Path) -> Dict[str, Any]:
+    con = connect(db_path)
+    try:
+        applied = con.execute(
+            """
+            SELECT seq, action_type, target_id, summary, created_at
+            FROM mutation_history
+            WHERE undone_at IS NULL
+            ORDER BY seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        undone = con.execute(
+            """
+            SELECT seq, action_type, target_id, summary, created_at, undone_at
+            FROM mutation_history
+            WHERE undone_at IS NOT NULL
+            ORDER BY undone_at DESC, seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return {
+            "can_undo": bool(applied),
+            "can_redo": bool(undone),
+            "last_action": dict(applied) if applied else None,
+            "next_redo": dict(undone) if undone else None,
+        }
+    finally:
+        con.close()
+
+
+def undo_last_mutation(db_path: Path) -> Dict[str, Any]:
+    con = connect(db_path)
+    try:
+        row = con.execute(
+            """
+            SELECT *
+            FROM mutation_history
+            WHERE undone_at IS NULL
+            ORDER BY seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            raise ValueError("nothing to undo")
+        payload = json.loads(row["before_json"])
+        if payload.get("type") == "asset_state":
+            _restore_asset_snapshot(con, payload)
+        elif payload.get("type") == "duplicate_group_state":
+            _restore_duplicate_group_snapshot(con, payload)
+        else:
+            raise ValueError(f"unsupported undo action: {row['action_type']}")
+        con.execute(
+            "UPDATE mutation_history SET undone_at=? WHERE seq=?",
+            (utcnow_iso(), row["seq"]),
+        )
+        con.commit()
+        return dict(row)
+    finally:
+        con.close()
+
+
+def redo_last_mutation(db_path: Path) -> Dict[str, Any]:
+    con = connect(db_path)
+    try:
+        row = con.execute(
+            """
+            SELECT *
+            FROM mutation_history
+            WHERE undone_at IS NOT NULL
+            ORDER BY undone_at DESC, seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            raise ValueError("nothing to redo")
+        payload = json.loads(row["after_json"])
+        if payload.get("type") == "asset_state":
+            _restore_asset_snapshot(con, payload)
+        elif payload.get("type") == "duplicate_group_state":
+            _restore_duplicate_group_snapshot(con, payload)
+        else:
+            raise ValueError(f"unsupported redo action: {row['action_type']}")
+        con.execute(
+            "UPDATE mutation_history SET undone_at=NULL, redone_at=? WHERE seq=?",
+            (utcnow_iso(), row["seq"]),
+        )
+        con.commit()
+        return dict(row)
+    finally:
+        con.close()
+
+
+def restore_mutation_history_entry(db_path: Path, seq: int) -> Dict[str, Any]:
+    con = connect(db_path)
+    try:
+        target = con.execute(
+            """
+            SELECT *
+            FROM mutation_history
+            WHERE seq=?
+            """,
+            (seq,),
+        ).fetchone()
+        if not target:
+            raise ValueError("history entry not found")
+        if target["undone_at"] is not None:
+            raise ValueError("history entry is not currently active")
+        later_rows = con.execute(
+            """
+            SELECT *
+            FROM mutation_history
+            WHERE seq > ? AND undone_at IS NULL
+            ORDER BY seq DESC
+            """,
+            (seq,),
+        ).fetchall()
+        for row in later_rows:
+            payload = json.loads(row["before_json"])
+            if payload.get("type") == "asset_state":
+                _restore_asset_snapshot(con, payload)
+            elif payload.get("type") == "duplicate_group_state":
+                _restore_duplicate_group_snapshot(con, payload)
+            else:
+                raise ValueError(f"unsupported history entry: {row['action_type']}")
+            con.execute(
+                "UPDATE mutation_history SET undone_at=? WHERE seq=?",
+                (utcnow_iso(), row["seq"]),
+            )
+        con.commit()
+        return dict(target)
+    finally:
+        con.close()
+
+
+def set_asset_review(
+    db_path: Path,
+    asset_id: str,
+    *,
+    user_rating: Optional[int] = None,
+    review_state: Optional[str] = None,
+    review_score: Optional[float] = None,
+    favorite: Optional[bool] = None,
+) -> None:
+    con = connect(db_path)
+    try:
+        before = _mutation_snapshot_for_review(con, asset_id)
+        ts = utcnow_iso()
+        updates = ["last_updated=?", "ranked_at=?"]
+        params: list[Any] = [ts, ts]
+        if user_rating is not None:
+            rating = max(0, min(int(user_rating), 5))
+            updates.append("user_rating=?")
+            params.append(rating)
+            _record_metadata_field(
+                con,
+                asset_id=asset_id,
+                field_name="user_rating",
+                value=rating,
+                source_name="user",
+                source_field="rating",
+                is_canonical=True,
+                confidence=1.0,
+            )
+        if review_state is not None:
+            updates.append("review_state=?")
+            params.append(review_state)
+            _record_metadata_field(
+                con,
+                asset_id=asset_id,
+                field_name="review_state",
+                value=review_state,
+                source_name="user",
+                source_field="state",
+                is_canonical=True,
+                confidence=1.0,
+            )
+        if review_score is not None:
+            updates.append("review_score=?")
+            params.append(float(review_score))
+            _record_metadata_field(
+                con,
+                asset_id=asset_id,
+                field_name="review_score",
+                value=float(review_score),
+                source_name="user",
+                source_field="score",
+                is_canonical=False,
+                confidence=1.0,
+            )
+        if favorite is not None:
+            updates.append("favorite=?")
+            params.append(1 if favorite else 0)
+            _record_metadata_field(
+                con,
+                asset_id=asset_id,
+                field_name="favorite",
+                value=bool(favorite),
+                source_name="user",
+                source_field="favorite",
+                is_canonical=True,
+                confidence=1.0,
+            )
+        params.append(asset_id)
+        con.execute(f"UPDATE assets SET {', '.join(updates)} WHERE id=?", params)
+        after = _mutation_snapshot_for_review(con, asset_id)
+        _write_mutation_history(
+            con,
+            action_type="SET_ASSET_REVIEW",
+            target_id=asset_id,
+            summary="Changed rating or review state",
+            before=before,
+            after=after,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def add_asset_person(
+    db_path: Path,
+    asset_id: str,
+    person: str,
+    *,
+    source_name: str = "user",
+    source_field: str = "people",
+) -> None:
+    label = str(person or "").strip()
+    if not label:
+        return
+    con = connect(db_path)
+    try:
+        before = _mutation_snapshot_for_people(con, asset_id)
+        row = con.execute("SELECT people_json FROM assets WHERE id=?", (asset_id,)).fetchone()
+        people = _coerce_list(row["people_json"] if row else [])
+        if label not in people:
+            people.append(label)
+        people = sorted(set(people))
+        con.execute(
+            "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
+            (json.dumps(people), utcnow_iso(), asset_id),
+        )
+        _record_metadata_field(
+            con,
+            asset_id=asset_id,
+            field_name="people",
+            value=people,
+            source_name=source_name,
+            source_field=source_field,
+            is_canonical=True,
+            confidence=1.0,
+        )
+        after = _mutation_snapshot_for_people(con, asset_id)
+        _write_mutation_history(
+            con,
+            action_type="ADD_ASSET_PERSON",
+            target_id=asset_id,
+            summary=f"Tagged person {label}",
+            before=before,
+            after=after,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def remove_asset_person(
+    db_path: Path,
+    asset_id: str,
+    person: str,
+    *,
+    source_name: str = "user",
+    source_field: str = "people",
+) -> None:
+    label = str(person or "").strip()
+    if not label:
+        return
+    con = connect(db_path)
+    try:
+        before = _mutation_snapshot_for_people(con, asset_id)
+        row = con.execute("SELECT people_json FROM assets WHERE id=?", (asset_id,)).fetchone()
+        people = _coerce_list(row["people_json"] if row else [])
+        people = [name for name in people if name != label]
+        con.execute(
+            "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
+            (json.dumps(sorted(set(people))), utcnow_iso(), asset_id),
+        )
+        _record_metadata_field(
+            con,
+            asset_id=asset_id,
+            field_name="people",
+            value=sorted(set(people)),
+            source_name=source_name,
+            source_field=source_field,
+            is_canonical=True,
+            confidence=1.0,
+        )
+        after = _mutation_snapshot_for_people(con, asset_id)
+        _write_mutation_history(
+            con,
+            action_type="REMOVE_ASSET_PERSON",
+            target_id=asset_id,
+            summary=f"Removed person {label}",
+            before=before,
+            after=after,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def list_assets_for_review(
+    db_path: Path,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT a.id, a.source, a.source_kind, a.media_type, a.orig_filename, a.dt_original,
+                   a.status, a.review_state, a.user_rating, a.review_score, a.favorite,
+                   a.target_relpath, a.target_filename, m.status AS managed_status, m.managed_path
+            FROM assets a
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE COALESCE(a.review_state, 'NEW') IN ('NEW', 'REVIEW', '')
+               OR a.user_rating IS NULL
+            ORDER BY COALESCE(a.user_rating, 0) ASC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_asset_neighbors(db_path: Path, asset_id: str, *, sort: str = "recent") -> Dict[str, Optional[Dict[str, Any]]]:
+    con = connect(db_path)
+    try:
+        order_clause = {
+            "rated": "COALESCE(user_rating, 0) DESC, COALESCE(review_score, 0) DESC, dt_original DESC, id DESC",
+            "review": "COALESCE(user_rating, 0) ASC, COALESCE(review_score, 0) DESC, dt_original DESC, id DESC",
+            "recent": "dt_original DESC, id DESC",
+        }.get(sort, "dt_original DESC, id DESC")
+        row = con.execute(
+            f"""
+            WITH ordered AS (
+              SELECT id,
+                     LAG(id) OVER (ORDER BY {order_clause}) AS prev_id,
+                     LEAD(id) OVER (ORDER BY {order_clause}) AS next_id
+              FROM assets
+            )
+            SELECT prev_id, next_id
+            FROM ordered
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (asset_id,),
+        ).fetchone()
+        if not row:
+            return {"prev": None, "next": None}
+        prev_item = con.execute("SELECT id, orig_filename FROM assets WHERE id=?", (row["prev_id"],)).fetchone() if row["prev_id"] else None
+        next_item = con.execute("SELECT id, orig_filename FROM assets WHERE id=?", (row["next_id"],)).fetchone() if row["next_id"] else None
+        return {"prev": dict(prev_item) if prev_item else None, "next": dict(next_item) if next_item else None}
+    finally:
+        con.close()
+
+
 def create_job(db_path: Path, job_type: str, config: Optional[Dict[str, Any]] = None) -> str:
     init_db(db_path)
     job_id = uuid.uuid4().hex[:20]
@@ -1303,6 +1933,63 @@ def list_jobs(db_path: Path, limit: int = 20) -> List[Dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def get_pipeline_health(db_path: Path) -> Dict[str, Any]:
+    init_db(db_path)
+    con = connect(db_path)
+    try:
+        job_rows = con.execute(
+            """
+            SELECT job_type, status, COALESCE(error_msg, '') AS error_msg
+            FROM jobs
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+        status_counts = {"COMPLETED": 0, "RUNNING": 0, "RETRYABLE": 0, "FAILED": 0, "QUEUED": 0}
+        job_types: Dict[str, Dict[str, Any]] = {}
+        for row in job_rows:
+            status = row["status"] or "QUEUED"
+            status_counts[status] = status_counts.get(status, 0) + 1
+            bucket = job_types.setdefault(row["job_type"], {"total": 0, "failures": 0, "latest_error": ""})
+            bucket["total"] += 1
+            if status in {"FAILED", "RETRYABLE"}:
+                bucket["failures"] += 1
+                if row["error_msg"] and not bucket["latest_error"]:
+                    bucket["latest_error"] = row["error_msg"]
+        missing_managed = con.execute(
+            """
+            SELECT COUNT(*)
+            FROM assets a
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE m.asset_id IS NULL
+               OR COALESCE(m.managed_path, '') = ''
+               OR m.status IN ('PLANNED', 'FAILED', 'MISSING')
+            """
+        ).fetchone()[0]
+        missing_previews = con.execute(
+            """
+            SELECT COUNT(*)
+            FROM assets a
+            LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
+            WHERE a.media_type IN ('image', 'raw', 'video')
+              AND (t.path IS NULL OR t.status <> 'READY')
+            """
+        ).fetchone()[0]
+        errored_assets = con.execute("SELECT COUNT(*) FROM assets WHERE status='ERROR'").fetchone()[0]
+        retryable_jobs = status_counts.get("RETRYABLE", 0)
+        failed_jobs = status_counts.get("FAILED", 0)
+        healthy = (errored_assets == 0 and retryable_jobs == 0 and failed_jobs == 0 and missing_managed == 0)
+        return {
+            "healthy": healthy,
+            "job_status_counts": status_counts,
+            "job_types": job_types,
+            "missing_managed_assets": missing_managed,
+            "missing_previews": missing_previews,
+            "errored_assets": errored_assets,
+        }
     finally:
         con.close()
 
@@ -1533,6 +2220,10 @@ def list_assets(
     offset: int = 0,
     query: Optional[str] = None,
     include_hidden: bool = False,
+    sort: str = "recent",
+    media_type: Optional[str] = None,
+    review_state: Optional[str] = None,
+    favorite_only: bool = False,
 ) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
@@ -1555,34 +2246,141 @@ def list_assets(
             FROM assets a
             LEFT JOIN managed_assets m ON m.asset_id = a.id
         """
-        params: List[Any] = []
-        clauses: List[str] = []
-        if not include_hidden:
-            clauses.append(
-                """
-                NOT EXISTS (
-                  SELECT 1
-                  FROM duplicate_items di_hide
-                  WHERE di_hide.asset_id = a.id
-                    AND di_hide.keep_decision = 'HIDE'
-                )
-                """
-            )
-        if query:
-            clauses.append(
-                """
-                (a.orig_filename LIKE ?
-                 OR COALESCE(a.title, '') LIKE ?
-                 OR COALESCE(a.description, '') LIKE ?)
-                """
-            )
-            like = f"%{query}%"
-            params.extend([like, like, like])
-        if clauses:
-            sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY a.dt_original DESC, a.id DESC LIMIT ? OFFSET ?"
+        where_sql, params = _asset_filter_sql(
+            query=query,
+            include_hidden=include_hidden,
+            media_type=media_type,
+            review_state=review_state,
+            favorite_only=favorite_only,
+        )
+        order_clause = _asset_order_clause(sort)
+        if where_sql:
+            sql += " WHERE " + where_sql
+        sql += f" ORDER BY {order_clause} LIMIT ? OFFSET ?"
         params.extend([limit, max(0, offset)])
         rows = con.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def _asset_filter_sql(
+    *,
+    query: Optional[str] = None,
+    include_hidden: bool = False,
+    media_type: Optional[str] = None,
+    review_state: Optional[str] = None,
+    favorite_only: bool = False,
+) -> tuple[str, List[Any]]:
+    params: List[Any] = []
+    clauses: List[str] = []
+    if not include_hidden:
+        clauses.append(
+            """
+            NOT EXISTS (
+              SELECT 1
+              FROM duplicate_items di_hide
+              WHERE di_hide.asset_id = a.id
+                AND di_hide.keep_decision = 'HIDE'
+            )
+            """
+        )
+    if query:
+        clauses.append(
+            """
+            (a.orig_filename LIKE ?
+             OR COALESCE(a.title, '') LIKE ?
+             OR COALESCE(a.description, '') LIKE ?)
+            """
+        )
+        like = f"%{query}%"
+        params.extend([like, like, like])
+    if media_type:
+        clauses.append("a.media_type = ?")
+        params.append(media_type)
+    if review_state:
+        clauses.append("COALESCE(a.review_state, 'NEW') = ?")
+        params.append(review_state)
+    if favorite_only:
+        clauses.append("COALESCE(a.favorite, 0) = 1")
+    return " AND ".join(clauses), params
+
+
+def count_assets(
+    db_path: Path,
+    *,
+    query: Optional[str] = None,
+    include_hidden: bool = False,
+    media_type: Optional[str] = None,
+    review_state: Optional[str] = None,
+    favorite_only: bool = False,
+) -> int:
+    con = connect(db_path)
+    try:
+        where_sql, params = _asset_filter_sql(
+            query=query,
+            include_hidden=include_hidden,
+            media_type=media_type,
+            review_state=review_state,
+            favorite_only=favorite_only,
+        )
+        sql = "SELECT COUNT(*) FROM assets a"
+        if where_sql:
+            sql += " WHERE " + where_sql
+        row = con.execute(sql, params).fetchone()
+        return int(row[0] if row else 0)
+    finally:
+        con.close()
+
+
+def _asset_order_clause(sort: str) -> str:
+    return {
+        "recent": "a.dt_original DESC, a.id DESC",
+        "rated": "COALESCE(a.user_rating, 0) DESC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
+        "favorites": "COALESCE(a.favorite, 0) DESC, COALESCE(a.user_rating, 0) DESC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
+        "review": "COALESCE(a.user_rating, 0) ASC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
+    }.get(sort, "a.dt_original DESC, a.id DESC")
+
+
+def save_saved_search(
+    db_path: Path,
+    *,
+    label: str,
+    params: Dict[str, Any],
+) -> str:
+    con = connect(db_path)
+    try:
+        search_id = hashlib.sha1(f"{label}|{json.dumps(params, sort_keys=True)}".encode("utf-8")).hexdigest()[:20]
+        ts = utcnow_iso()
+        con.execute(
+            """
+            INSERT INTO saved_searches (id, label, params_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              label=excluded.label,
+              params_json=excluded.params_json,
+              updated_at=excluded.updated_at
+            """,
+            (search_id, label.strip() or "Saved Search", json.dumps(params, sort_keys=True), ts, ts),
+        )
+        con.commit()
+        return search_id
+    finally:
+        con.close()
+
+
+def list_saved_searches(db_path: Path, *, limit: int = 20) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT id, label, params_json, created_at, updated_at
+            FROM saved_searches
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
         return [dict(row) for row in rows]
     finally:
         con.close()
@@ -1650,6 +2448,45 @@ def list_assets_with_flag(
             (field_name, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def get_import_progress(db_path: Path) -> Dict[str, Any]:
+    con = connect(db_path)
+    try:
+        total_assets = con.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
+        ready_assets = con.execute(
+            """
+            SELECT COUNT(DISTINCT a.id)
+            FROM assets a
+            JOIN managed_assets m ON m.asset_id = a.id
+            LEFT JOIN thumbnails t
+              ON t.asset_id = a.id
+             AND (
+                    (a.media_type IN ('image', 'raw') AND t.kind = 'primary' AND t.status = 'READY')
+                 OR (a.media_type = 'video' AND t.kind = 'video_preview' AND t.status = 'READY')
+             )
+            WHERE a.status IN ('EMBEDDED', 'COPIED')
+              AND m.status = 'BUILT'
+              AND t.asset_id IS NOT NULL
+            """
+        ).fetchone()[0]
+        managed_ready = con.execute(
+            "SELECT COUNT(*) FROM managed_assets WHERE status='BUILT'"
+        ).fetchone()[0]
+        previews_ready = con.execute(
+            "SELECT COUNT(*) FROM thumbnails WHERE status='READY'"
+        ).fetchone()[0]
+        completion_pct = round((ready_assets / total_assets) * 100, 1) if total_assets else 0.0
+        return {
+            "total_assets": total_assets,
+            "ready_assets": ready_assets,
+            "completion_pct": completion_pct,
+            "pending_assets": max(total_assets - ready_assets, 0),
+            "managed_ready": managed_ready,
+            "previews_ready": previews_ready,
+        }
     finally:
         con.close()
 
@@ -1753,30 +2590,90 @@ def export_asset_metadata_payload(db_path: Path, asset_id: str) -> Dict[str, Any
     }
 
 
-def list_duplicate_groups(db_path: Path, limit: int = 50) -> List[Dict[str, Any]]:
+def list_duplicate_groups(
+    db_path: Path,
+    limit: int = 50,
+    *,
+    min_score: Optional[float] = None,
+    group_type: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if group_type:
+            clauses.append("g.group_type = ?")
+            params.append(group_type)
+        if status:
+            clauses.append("g.status = ?")
+            params.append(status)
+        visible_count_expr = "SUM(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN 1 ELSE 0 END)"
+        visible_score_expr = "AVG(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN COALESCE(i.score, 0) END)"
+        having_clauses: List[str] = []
+        if status == "OPEN":
+            having_clauses.append(f"{visible_count_expr} > 1")
+        if min_score is not None:
+            having_clauses.append(f"COALESCE({visible_score_expr}, 0) >= ?")
+        query_params: List[Any] = list(params)
+        if min_score is not None:
+            query_params.append(min_score)
+        query_params.append(limit)
         rows = con.execute(
             """
-            SELECT g.*, COUNT(i.asset_id) AS item_count,
+            SELECT g.*, COUNT(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN 1 END) AS item_count,
+                   COALESCE(SUM(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN 1 ELSE 0 END), 0) AS visible_item_count,
+                   COALESCE(AVG(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN COALESCE(i.score, 0) END), 0) AS match_score,
+                   COALESCE(MAX(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN COALESCE(i.score, 0) END), 0) AS best_score,
                    a.orig_filename AS canonical_filename
             FROM duplicate_groups g
             LEFT JOIN duplicate_items i ON i.group_id = g.id
             LEFT JOIN assets a ON a.id = g.canonical_asset_id
+            """
+            + (f" WHERE {' AND '.join(clauses)}" if clauses else "")
+            + """
             GROUP BY g.id
-            ORDER BY g.created_at DESC
+            """
+            + (" HAVING " + " AND ".join(having_clauses) if having_clauses else "")
+            + """
+            ORDER BY COALESCE(AVG(CASE WHEN COALESCE(i.keep_decision, '') <> 'HIDE' THEN COALESCE(i.score, 0) END), 0) DESC, g.created_at DESC
             LIMIT ?
             """,
-            (limit,),
+            tuple(query_params),
         ).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        for row in result:
+            try:
+                row["match_score_pct"] = round(float(row.get("match_score") or 0) * 100, 1)
+                row["best_score_pct"] = round(float(row.get("best_score") or 0) * 100, 1)
+            except Exception:
+                row["match_score_pct"] = 0.0
+                row["best_score_pct"] = 0.0
+        return result
     finally:
         con.close()
 
 
-def list_duplicate_group_items(db_path: Path, group_id: str) -> List[Dict[str, Any]]:
+def get_duplicate_group(db_path: Path, group_id: str) -> Optional[Dict[str, Any]]:
     con = connect(db_path)
     try:
+        row = con.execute(
+            """
+            SELECT *
+            FROM duplicate_groups
+            WHERE id = ?
+            """,
+            (group_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def list_duplicate_group_items(db_path: Path, group_id: str, *, include_hidden: bool = False) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        hidden_clause = "" if include_hidden else " AND COALESCE(i.keep_decision, '') <> 'HIDE'"
         rows = con.execute(
             """
             SELECT i.*, a.orig_filename, a.media_type, a.dt_original, a.orig_size,
@@ -1786,6 +2683,9 @@ def list_duplicate_group_items(db_path: Path, group_id: str) -> List[Dict[str, A
             LEFT JOIN managed_assets m ON m.asset_id = a.id
             LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
             WHERE i.group_id = ?
+            """
+            + hidden_clause
+            + """
             ORDER BY a.orig_size DESC, a.dt_original ASC, a.id ASC
             """,
             (group_id,),
@@ -1800,12 +2700,14 @@ def list_faces(db_path: Path, limit: int = 50, *, include_rejected: bool = False
     try:
         sql = """
             SELECT f.*, i.label AS identity_label, a.orig_filename, a.media_type, t.path AS thumbnail_path,
-                   m.managed_path
+                   m.managed_path, c.suggested_label, c.score AS clarification_score, c.status AS clarification_status,
+                   c.rationale AS clarification_rationale, c.suggested_identity_id
             FROM faces f
             LEFT JOIN face_identities i ON i.id = f.identity_id
             LEFT JOIN assets a ON a.id = f.asset_id
             LEFT JOIN managed_assets m ON m.asset_id = a.id
             LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
+            LEFT JOIN face_clarifications c ON c.face_id = f.id
         """
         params: List[Any] = []
         if not include_rejected:
@@ -1831,10 +2733,35 @@ def list_face_identities(db_path: Path, limit: int = 200) -> List[Dict[str, Any]
             FROM face_identities i
             LEFT JOIN faces f ON f.identity_id = i.id
             GROUP BY i.id
-            ORDER BY i.label ASC
+            ORDER BY COUNT(f.id) DESC, i.label ASC
             LIMIT ?
             """,
             (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_face_clarifications(db_path: Path, *, limit: int = 200, status: str = "OPEN") -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT c.*, f.asset_id, f.identity_id, f.status AS face_status, f.bbox_json,
+                   a.orig_filename, a.media_type, m.managed_path, t.path AS thumbnail_path,
+                   i.label AS suggested_identity_label
+            FROM face_clarifications c
+            JOIN faces f ON f.id = c.face_id
+            LEFT JOIN face_identities i ON i.id = c.suggested_identity_id
+            LEFT JOIN assets a ON a.id = f.asset_id
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
+            WHERE c.status = ?
+            ORDER BY c.score DESC, c.created_at DESC
+            LIMIT ?
+            """,
+            (status, limit),
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -1860,6 +2787,51 @@ def create_face_identity(db_path: Path, label: str, *, status: str = "CONFIRMED"
         )
         con.commit()
         return identity_id
+    finally:
+        con.close()
+
+
+def save_face_clarification(
+    db_path: Path,
+    face_id: str,
+    *,
+    suggested_identity_id: Optional[str],
+    suggested_label: Optional[str],
+    score: float,
+    rationale: str,
+) -> None:
+    con = connect(db_path)
+    try:
+        con.execute(
+            """
+            INSERT INTO face_clarifications (
+              face_id, suggested_identity_id, suggested_label, score, rationale, status, created_at, resolved_at
+            ) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, NULL)
+            ON CONFLICT(face_id) DO UPDATE SET
+              suggested_identity_id=excluded.suggested_identity_id,
+              suggested_label=excluded.suggested_label,
+              score=excluded.score,
+              rationale=excluded.rationale,
+              status='OPEN',
+              created_at=excluded.created_at,
+              resolved_at=NULL
+            """,
+            (face_id, suggested_identity_id, suggested_label, score, rationale, utcnow_iso()),
+        )
+        con.execute("UPDATE faces SET status='REVIEW' WHERE id=?", (face_id,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def resolve_face_clarification(db_path: Path, face_id: str, *, status: str = "RESOLVED") -> None:
+    con = connect(db_path)
+    try:
+        con.execute(
+            "UPDATE face_clarifications SET status=?, resolved_at=? WHERE face_id=?",
+            (status, utcnow_iso(), face_id),
+        )
+        con.commit()
     finally:
         con.close()
 
@@ -1899,6 +2871,107 @@ def save_face_embedding(
         con.close()
 
 
+def save_embedding(
+    db_path: Path,
+    *,
+    asset_id: str,
+    embedding_type: str,
+    vector: List[float],
+    model_name: str,
+    vector_ref: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    embedding_id = uuid.uuid4().hex[:20]
+    con = connect(db_path)
+    try:
+        con.execute(
+            """
+            INSERT INTO embeddings (id, asset_id, embedding_type, model_name, vector_ref, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                embedding_id,
+                asset_id,
+                embedding_type,
+                model_name,
+                vector_ref,
+                json.dumps({"vector": vector, **(payload or {})}),
+                utcnow_iso(),
+            ),
+        )
+        con.commit()
+        return embedding_id
+    finally:
+        con.close()
+
+
+def replace_embedding(
+    db_path: Path,
+    *,
+    asset_id: str,
+    embedding_type: str,
+    model_name: str,
+    vector: List[float],
+    vector_ref: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> str:
+    con = connect(db_path)
+    try:
+        con.execute(
+            "DELETE FROM embeddings WHERE asset_id = ? AND embedding_type = ? AND model_name = ?",
+            (asset_id, embedding_type, model_name),
+        )
+        embedding_id = uuid.uuid4().hex[:20]
+        con.execute(
+            """
+            INSERT INTO embeddings (id, asset_id, embedding_type, model_name, vector_ref, payload_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                embedding_id,
+                asset_id,
+                embedding_type,
+                model_name,
+                vector_ref,
+                json.dumps({"vector": vector, **(payload or {})}),
+                utcnow_iso(),
+            ),
+        )
+        con.commit()
+        return embedding_id
+    finally:
+        con.close()
+
+
+def list_asset_embeddings(db_path: Path, asset_id: str, *, embedding_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        sql = """
+            SELECT id, asset_id, embedding_type, model_name, vector_ref, payload_json, created_at
+            FROM embeddings
+            WHERE asset_id = ?
+        """
+        params: list[Any] = [asset_id]
+        if embedding_type:
+            sql += " AND embedding_type = ?"
+            params.append(embedding_type)
+        sql += " ORDER BY created_at ASC"
+        rows = con.execute(sql, params).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                payload = json.loads(item.get("payload_json") or "{}")
+            except Exception:
+                payload = {}
+            item["vector"] = payload.get("vector") or []
+            item["payload"] = payload
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
 def list_face_embeddings(db_path: Path) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
@@ -1918,6 +2991,72 @@ def list_face_embeddings(db_path: Path) -> List[Dict[str, Any]]:
             item = dict(row)
             payload = json.loads(item.get("payload_json") or "{}")
             item["vector"] = payload.get("vector") or []
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
+def record_extraction_result(
+    db_path: Path,
+    asset_id: str,
+    *,
+    result_type: str,
+    text_content: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+    segment_start_ms: Optional[int] = None,
+    segment_end_ms: Optional[int] = None,
+    status: str = "READY",
+) -> str:
+    extraction_id = uuid.uuid4().hex[:20]
+    con = connect(db_path)
+    try:
+        con.execute(
+            """
+            INSERT INTO extraction_results (
+              id, asset_id, result_type, segment_start_ms, segment_end_ms, text_content, payload_json, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                extraction_id,
+                asset_id,
+                result_type,
+                segment_start_ms,
+                segment_end_ms,
+                text_content,
+                json.dumps(payload or {}, sort_keys=True),
+                status,
+                utcnow_iso(),
+            ),
+        )
+        con.commit()
+        return extraction_id
+    finally:
+        con.close()
+
+
+def list_extraction_results(db_path: Path, asset_id: str, *, result_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        sql = """
+            SELECT id, asset_id, result_type, segment_start_ms, segment_end_ms, text_content,
+                   payload_json, status, created_at
+            FROM extraction_results
+            WHERE asset_id = ?
+        """
+        params: list[Any] = [asset_id]
+        if result_type:
+            sql += " AND result_type = ?"
+            params.append(result_type)
+        sql += " ORDER BY created_at ASC"
+        rows = con.execute(sql, params).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["payload"] = json.loads(item.get("payload_json") or "{}")
+            except Exception:
+                item["payload"] = {}
             out.append(item)
         return out
     finally:
@@ -2053,6 +3192,7 @@ def assign_face_identity(db_path: Path, face_id: str, identity_id: str) -> None:
     else:
         update_face_cluster(db_path, face_id, identity_id, labeled=True)
     apply_identity_to_assets(db_path, cluster_identity)
+    resolve_face_clarification(db_path, face_id, status="RESOLVED")
 
 
 def reject_face(db_path: Path, face_id: str) -> None:
@@ -2061,6 +3201,10 @@ def reject_face(db_path: Path, face_id: str) -> None:
         con.execute(
             "UPDATE faces SET status='REJECTED', identity_id=NULL WHERE id=?",
             (face_id,),
+        )
+        con.execute(
+            "UPDATE face_clarifications SET status='DISMISSED', resolved_at=? WHERE face_id=?",
+            (utcnow_iso(), face_id),
         )
         con.commit()
     finally:
@@ -2095,18 +3239,117 @@ def get_face_overview(db_path: Path) -> Dict[str, Any]:
         unlabeled = con.execute("SELECT COUNT(*) FROM faces WHERE identity_id IS NULL AND status <> 'REJECTED'").fetchone()[0]
         clustered = con.execute("SELECT COUNT(*) FROM faces WHERE identity_id IS NOT NULL AND status='CLUSTERED'").fetchone()[0]
         labeled = con.execute("SELECT COUNT(*) FROM faces WHERE identity_id IS NOT NULL AND status='LABELED'").fetchone()[0]
+        review = con.execute("SELECT COUNT(*) FROM faces WHERE status='REVIEW'").fetchone()[0]
         rejected = con.execute("SELECT COUNT(*) FROM faces WHERE status='REJECTED'").fetchone()[0]
         assets = con.execute("SELECT COUNT(DISTINCT asset_id) FROM faces WHERE status <> 'REJECTED'").fetchone()[0]
         identities = con.execute("SELECT COUNT(*) FROM face_identities").fetchone()[0]
+        clarifications = con.execute("SELECT COUNT(*) FROM face_clarifications WHERE status='OPEN'").fetchone()[0]
         return {
             "total_faces": total,
             "unlabeled_faces": unlabeled,
             "clustered_faces": clustered,
             "labeled_faces": labeled,
+            "review_faces": review,
             "rejected_faces": rejected,
+            "clarifications_open": clarifications,
             "assets_with_faces": assets,
             "identities": identities,
         }
+    finally:
+        con.close()
+
+
+def list_person_albums(
+    db_path: Path,
+    *,
+    limit: int = 100,
+    query: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        params: List[Any] = []
+        clause = ""
+        if query:
+            clause = "WHERE lower(i.label) LIKE ?"
+            params.append(f"%{query.lower()}%")
+        rows = con.execute(
+            f"""
+            SELECT i.id, i.label, i.status, COUNT(DISTINCT f.id) AS face_count,
+                   COUNT(DISTINCT f.asset_id) AS asset_count,
+                   MAX(f.created_at) AS last_seen_at,
+                   (
+                     SELECT f2.asset_id
+                     FROM faces f2
+                     WHERE f2.identity_id = i.id
+                       AND f2.status <> 'REJECTED'
+                     ORDER BY f2.created_at DESC
+                     LIMIT 1
+                   ) AS cover_asset_id,
+                   (
+                     SELECT f2.id
+                     FROM faces f2
+                     WHERE f2.identity_id = i.id
+                       AND f2.status <> 'REJECTED'
+                     ORDER BY f2.created_at DESC
+                     LIMIT 1
+                   ) AS cover_face_id
+            FROM face_identities i
+            LEFT JOIN faces f ON f.identity_id = i.id AND f.status <> 'REJECTED'
+            {clause}
+            GROUP BY i.id
+            HAVING COUNT(DISTINCT f.id) > 0
+            ORDER BY COUNT(DISTINCT f.id) DESC, i.label ASC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_assets_for_person(db_path: Path, label: str, *, limit: int = 48) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT a.id, a.orig_filename, a.media_type, a.dt_original, a.status,
+                   a.user_rating, a.review_state, a.favorite, m.managed_path,
+                   MAX(f.created_at) AS last_seen_at,
+                   COUNT(f.id) AS face_count
+            FROM faces f
+            JOIN face_identities i ON i.id = f.identity_id
+            JOIN assets a ON a.id = f.asset_id
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE lower(i.label) = lower(?)
+              AND f.status <> 'REJECTED'
+            GROUP BY a.id
+            ORDER BY MAX(f.created_at) DESC, a.dt_original DESC, a.id DESC
+            LIMIT ?
+            """,
+            (label, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_geotagged_assets(db_path: Path, *, limit: int = 32) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT a.id, a.orig_filename, a.media_type, a.dt_original, a.gps_lat, a.gps_lon,
+                   a.gps_alt, a.status, m.managed_path
+            FROM assets a
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL
+            ORDER BY a.dt_original DESC, a.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         con.close()
 
@@ -2262,6 +3505,7 @@ def resolve_duplicate_group(
     kept.add(canonical_asset_id)
     con = connect(db_path)
     try:
+        before = _capture_duplicate_group_snapshot(con, group_id)
         exists = con.execute(
             "SELECT 1 FROM duplicate_items WHERE group_id=? AND asset_id=?",
             (group_id, canonical_asset_id),
@@ -2306,6 +3550,15 @@ def resolve_duplicate_group(
                 utcnow_iso(),
             ),
         )
+        after = _capture_duplicate_group_snapshot(con, group_id)
+        _write_mutation_history(
+            con,
+            action_type="RESOLVE_DUPLICATE_GROUP",
+            target_id=group_id,
+            summary="Resolved duplicate group",
+            before=before,
+            after=after,
+        )
         con.commit()
     finally:
         con.close()
@@ -2314,6 +3567,7 @@ def resolve_duplicate_group(
 def keep_all_duplicate_group(db_path: Path, group_id: str) -> None:
     con = connect(db_path)
     try:
+        before = _capture_duplicate_group_snapshot(con, group_id)
         rows = con.execute(
             "SELECT asset_id FROM duplicate_items WHERE group_id=?",
             (group_id,),
@@ -2346,6 +3600,15 @@ def keep_all_duplicate_group(db_path: Path, group_id: str) -> None:
                 utcnow_iso(),
             ),
         )
+        after = _capture_duplicate_group_snapshot(con, group_id)
+        _write_mutation_history(
+            con,
+            action_type="KEEP_ALL_DUPLICATE_GROUP",
+            target_id=group_id,
+            summary="Kept all duplicate items",
+            before=before,
+            after=after,
+        )
         con.commit()
     finally:
         con.close()
@@ -2354,6 +3617,7 @@ def keep_all_duplicate_group(db_path: Path, group_id: str) -> None:
 def skip_duplicate_group(db_path: Path, group_id: str) -> None:
     con = connect(db_path)
     try:
+        before = _capture_duplicate_group_snapshot(con, group_id)
         exists = con.execute(
             "SELECT 1 FROM duplicate_groups WHERE id=?",
             (group_id,),
@@ -2367,6 +3631,84 @@ def skip_duplicate_group(db_path: Path, group_id: str) -> None:
         con.execute(
             "UPDATE duplicate_items SET keep_decision='SKIP' WHERE group_id=? AND keep_decision IS NULL",
             (group_id,),
+        )
+        after = _capture_duplicate_group_snapshot(con, group_id)
+        _write_mutation_history(
+            con,
+            action_type="SKIP_DUPLICATE_GROUP",
+            target_id=group_id,
+            summary="Skipped duplicate group",
+            before=before,
+            after=after,
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def hide_duplicate_group_item(db_path: Path, group_id: str, asset_id: str) -> None:
+    con = connect(db_path)
+    try:
+        before = _capture_duplicate_group_snapshot(con, group_id)
+        row = con.execute(
+            "SELECT 1 FROM duplicate_items WHERE group_id=? AND asset_id=?",
+            (group_id, asset_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("duplicate item not found")
+        con.execute(
+            "UPDATE duplicate_items SET keep_decision='HIDE' WHERE group_id=? AND asset_id=?",
+            (group_id, asset_id),
+        )
+        visible_rows = con.execute(
+            """
+            SELECT asset_id
+            FROM duplicate_items
+            WHERE group_id=? AND COALESCE(keep_decision, '') <> 'HIDE'
+            ORDER BY asset_id
+            """,
+            (group_id,),
+        ).fetchall()
+        visible_ids = [row["asset_id"] for row in visible_rows]
+        if len(visible_ids) == 1:
+            canonical_asset_id = visible_ids[0]
+            con.execute(
+                """
+                UPDATE duplicate_groups
+                SET canonical_asset_id=?, status='RESOLVED', resolved_at=?
+                WHERE id=?
+                """,
+                (canonical_asset_id, utcnow_iso(), group_id),
+            )
+            con.execute(
+                "UPDATE duplicate_items SET keep_decision='CANONICAL' WHERE group_id=? AND asset_id=?",
+                (group_id, canonical_asset_id),
+            )
+        elif not visible_ids:
+            con.execute(
+                "UPDATE duplicate_groups SET status='SKIPPED', resolved_at=? WHERE id=?",
+                (utcnow_iso(), group_id),
+            )
+        con.execute(
+            """
+            INSERT INTO review_decisions (id, asset_id, decision_type, value_json, created_at)
+            VALUES (?, ?, 'duplicate_item_hidden', ?, ?)
+            """,
+            (
+                uuid.uuid4().hex[:20],
+                asset_id,
+                json.dumps({"group_id": group_id, "hidden_asset_id": asset_id}),
+                utcnow_iso(),
+            ),
+        )
+        after = _capture_duplicate_group_snapshot(con, group_id)
+        _write_mutation_history(
+            con,
+            action_type="HIDE_DUPLICATE_ITEM",
+            target_id=group_id,
+            summary="Removed duplicate item",
+            before=before,
+            after=after,
         )
         con.commit()
     finally:

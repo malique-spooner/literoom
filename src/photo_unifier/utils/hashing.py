@@ -38,9 +38,8 @@ def difference_hash(path: Path, *, hash_size: int = 8) -> str:
     pixels = np.asarray(img, dtype="float32")
     bits = []
     for row in range(hash_size):
-        offset = row * (hash_size + 1)
         for col in range(hash_size):
-            bits.append("1" if pixels[offset + col] > pixels[offset + col + 1] else "0")
+            bits.append("1" if pixels[row, col] > pixels[row, col + 1] else "0")
     value = int("".join(bits), 2)
     width = (hash_size * hash_size + 3) // 4
     return f"{value:0{width}x}"

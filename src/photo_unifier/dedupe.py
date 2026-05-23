@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from .metadata import manifest
-from .utils.hashing import average_hash, hamming_distance, sha256_file
+from .utils.hashing import average_hash, difference_hash, hamming_distance, sha256_file
 
 
 def _canonical_asset(items: List[Dict]) -> str:
@@ -105,6 +106,64 @@ def _preview_path(
     return None
 
 
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _pair_score(left: Dict, right: Dict) -> tuple[float, str, float]:
+    ah_left = left.get("ahash64")
+    ah_right = right.get("ahash64")
+    dh_left = left.get("dhash64")
+    dh_right = right.get("dhash64")
+    ah_distance = hamming_distance(ah_left, ah_right) if ah_left and ah_right else 64
+    dh_distance = hamming_distance(dh_left, dh_right) if dh_left and dh_right else 64
+    hash_score = 1.0 - ((ah_distance * 0.6 + dh_distance * 0.4) / 64.0)
+
+    dt_left = _parse_dt(left.get("dt_original"))
+    dt_right = _parse_dt(right.get("dt_original"))
+    time_score = 0.0
+    time_note = "time=unknown"
+    if dt_left and dt_right:
+        delta_seconds = abs((dt_left - dt_right).total_seconds())
+        if delta_seconds <= 30:
+            time_score = 1.0
+        elif delta_seconds <= 300:
+            time_score = 0.85
+        elif delta_seconds <= 1800:
+            time_score = 0.65
+        elif delta_seconds <= 43200:
+            time_score = 0.35
+        else:
+            time_score = 0.1
+        time_note = f"time_delta={int(delta_seconds)}s"
+
+    source_score = 0.0
+    source_bits: list[str] = []
+    if left.get("source") and left.get("source") == right.get("source"):
+        source_score += 0.12
+        source_bits.append("same source")
+    if left.get("source_kind") and left.get("source_kind") == right.get("source_kind"):
+        source_score += 0.08
+        source_bits.append("same source kind")
+    if left.get("source_root") and left.get("source_root") == right.get("source_root"):
+        source_score += 0.08
+        source_bits.append("same source root")
+
+    media_bias = 0.05 if left.get("media_type") == right.get("media_type") else -0.2
+    score = (hash_score * 0.72) + (time_score * 0.18) + source_score + media_bias
+    average_distance = (ah_distance * 0.6) + (dh_distance * 0.4)
+    rationale = (
+        f"ahash={ah_distance} dhash={dh_distance} {time_note}"
+        + (f" {'; '.join(source_bits)}" if source_bits else "")
+    )
+    return score, rationale, average_distance
+
+
 def run_near(
     db_path: Path,
     managed_library_dir: Path,
@@ -126,13 +185,17 @@ def run_near(
             continue
         try:
             digest = average_hash(preview)
+            diff_digest = difference_hash(preview)
         except Exception:
             missing += 1
             continue
         hashed += 1
         manifest.record_hash(db_path, row["id"], "ahash64", "preview", digest)
+        manifest.record_hash(db_path, row["id"], "dhash64", "preview", diff_digest)
         day_bucket = (row.get("dt_original") or "")[:10] or "unknown"
-        buckets[(row.get("media_type") or "unknown", day_bucket)].append({**row, "ahash64": digest, "preview_path": str(preview)})
+        buckets[(row.get("media_type") or "unknown", day_bucket)].append(
+            {**row, "ahash64": digest, "dhash64": diff_digest, "preview_path": str(preview)}
+        )
 
     groups: List[Dict] = []
     for (_media_type, _day_bucket), items in buckets.items():
@@ -154,7 +217,8 @@ def run_near(
 
         for i, left in enumerate(items):
             for right in items[i + 1 :]:
-                if hamming_distance(left["ahash64"], right["ahash64"]) <= max_distance:
+                score, rationale, avg_distance = _pair_score(left, right)
+                if avg_distance <= max_distance or (score >= 0.82 and avg_distance <= max_distance + 4):
                     union(left["id"], right["id"])
 
         clusters: Dict[str, List[Dict]] = defaultdict(list)
@@ -171,8 +235,8 @@ def run_near(
                     "items": [
                         {
                             "asset_id": item["id"],
-                            "score": round(1.0 - (hamming_distance(cluster_items[0]["ahash64"], item["ahash64"]) / 64.0), 3),
-                            "rationale": f"near match ahash64 distance={hamming_distance(cluster_items[0]['ahash64'], item['ahash64'])}",
+                            "score": round(_pair_score(cluster_items[0], item)[0], 3),
+                            "rationale": _pair_score(cluster_items[0], item)[1],
                         }
                         for item in cluster_items
                     ],

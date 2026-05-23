@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 
 from .config import DEFAULT_CONFIG_PATH, load_config
 from .derivatives import build_derivatives
+from . import intelligence
 from .metadata_repair import repair_metadata
 from . import dedupe
 from . import faces
@@ -13,10 +14,25 @@ from .metadata import gather, manifest, master
 
 def load_runtime(config_path: Path | str = DEFAULT_CONFIG_PATH):
     config, resolved = load_config(config_path)
+    config.prepare_runtime_environment(resolved)
     config.ensure_workspace_dirs(resolved)
     db_path = config.db_path(resolved)
     manifest.init_db(db_path)
     return config, resolved, db_path
+
+
+def _complete_job(db_path, job_id: str, stage: str, result: dict) -> dict:
+    payload = {"stage": stage, **result}
+    manifest.complete_job(db_path, job_id, payload)
+    return payload
+
+
+def _fail_job(db_path, job_id: str, stage: str, exc: Exception, *, metrics: Optional[dict] = None) -> None:
+    message = str(exc)
+    retryable = True
+    if any(token in message.lower() for token in ["no ingest sources configured", "not found", "missing config"]):
+        retryable = False
+    manifest.fail_job(db_path, job_id, f"{stage}: {message}", retryable=retryable, metrics=metrics)
 
 
 def run_ingest(
@@ -39,11 +55,9 @@ def run_ingest(
             batch_size=config.pipeline.batch_size,
             job_id=job_id,
         )
-        result = {"job_id": job_id, "rows_upserted": total}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "ingest", {"job_id": job_id, "rows_upserted": total})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "ingest", exc, metrics={"sources": [str(p) for p in resolved_sources]})
         raise
 
 
@@ -53,11 +67,9 @@ def run_plan_library(config_path: Path | str = DEFAULT_CONFIG_PATH) -> dict:
     manifest.start_job(db_path, job_id)
     try:
         planned = manifest.plan_targets(db_path, naming=config.pipeline.managed_naming)
-        result = {"job_id": job_id, "planned_assets": planned}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "plan_library", {"job_id": job_id, "planned_assets": planned})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "plan_library", exc, metrics={"naming": config.pipeline.managed_naming})
         raise
 
 
@@ -79,11 +91,9 @@ def run_build_library(
             force=force,
             limit=limit,
         )
-        result = {"job_id": job_id, "processed_assets": count}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "build_library", {"job_id": job_id, "processed_assets": count, "force": force})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "build_library", exc, metrics={"limit": limit, "force": force})
         raise
 
 
@@ -101,11 +111,9 @@ def run_build_derivatives(config_path: Path | str = DEFAULT_CONFIG_PATH, *, limi
             ffmpeg_path=config.tools.ffmpeg,
             limit=limit,
         )
-        result = {"job_id": job_id, **result}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "build_derivatives", {"job_id": job_id, **result})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "build_derivatives", exc, metrics={"limit": limit})
         raise
 
 
@@ -119,11 +127,9 @@ def run_dedupe_exact(config_path: Path | str = DEFAULT_CONFIG_PATH, *, limit: Op
             managed_library_dir=config.managed_library_dir(resolved),
             limit=limit,
         )
-        result = {"job_id": job_id, **result}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "dedupe_exact", {"job_id": job_id, **result})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "dedupe_exact", exc, metrics={"limit": limit})
         raise
 
 
@@ -144,11 +150,9 @@ def run_dedupe_near(
             limit=limit,
             max_distance=max_distance,
         )
-        result = {"job_id": job_id, **result}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "dedupe_near", {"job_id": job_id, **result})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "dedupe_near", exc, metrics={"limit": limit, "max_distance": max_distance})
         raise
 
 
@@ -164,11 +168,26 @@ def run_metadata_repair(config_path: Path | str = DEFAULT_CONFIG_PATH, *, limit:
             source_roots=config.resolved_sources(resolved),
             limit=limit,
         )
-        result = {"job_id": job_id, **result}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "metadata_repair", {"job_id": job_id, **result})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "metadata_repair", exc, metrics={"limit": limit})
+        raise
+
+
+def run_content_extraction(config_path: Path | str = DEFAULT_CONFIG_PATH, *, limit: Optional[int] = None) -> dict:
+    config, resolved, db_path = load_runtime(config_path)
+    job_id = manifest.create_job(db_path, "content_extraction", {"limit": limit})
+    manifest.start_job(db_path, job_id)
+    try:
+        result = intelligence.extract_asset_content(
+            db_path=db_path,
+            managed_library_dir=config.managed_library_dir(resolved),
+            limit=limit,
+            whisper_model=config.tools.whisper_model,
+        )
+        return _complete_job(db_path, job_id, "content_extraction", {"job_id": job_id, **result})
+    except Exception as exc:
+        _fail_job(db_path, job_id, "content_extraction", exc, metrics={"limit": limit})
         raise
 
 
@@ -184,6 +203,7 @@ def run_full_pipeline(
     built = run_build_library(config_path, limit=batch_limit)
     derivatives = run_build_derivatives(config_path, limit=batch_limit)
     metadata = run_metadata_repair(config_path, limit=batch_limit)
+    content = run_content_extraction(config_path, limit=batch_limit)
     dedupe = run_dedupe_exact(config_path, limit=batch_limit)
     near_dedupe = run_dedupe_near(config_path, limit=batch_limit)
     return {
@@ -192,6 +212,7 @@ def run_full_pipeline(
         "build": built,
         "derivatives": derivatives,
         "metadata": metadata,
+        "content": content,
         "dedupe": dedupe,
         "near_dedupe": near_dedupe,
     }
@@ -214,6 +235,7 @@ def run_pilot_pipeline(
     built = run_build_library(config_path, limit=batch_limit)
     derivatives = run_build_derivatives(config_path, limit=batch_limit)
     metadata = run_metadata_repair(config_path, limit=batch_limit)
+    content = run_content_extraction(config_path, limit=batch_limit)
     dedupe_exact = run_dedupe_exact(config_path, limit=batch_limit)
     dedupe_near = run_dedupe_near(config_path, limit=batch_limit)
     face_result = run_face_detection(config_path, limit=batch_limit, force=True)
@@ -231,6 +253,7 @@ def run_pilot_pipeline(
         "build": built,
         "derivatives": derivatives,
         "metadata": metadata,
+        "content": content,
         "dedupe_exact": dedupe_exact,
         "dedupe_near": dedupe_near,
         "faces": face_result,
@@ -253,9 +276,7 @@ def run_face_detection(
             limit=limit,
             force=force,
         )
-        result = {"job_id": job_id, **result}
-        manifest.complete_job(db_path, job_id, result)
-        return result
+        return _complete_job(db_path, job_id, "face_detection", {"job_id": job_id, **result})
     except Exception as exc:
-        manifest.fail_job(db_path, job_id, str(exc))
+        _fail_job(db_path, job_id, "face_detection", exc, metrics={"limit": limit, "force": force})
         raise

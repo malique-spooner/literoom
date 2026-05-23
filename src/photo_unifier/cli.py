@@ -9,12 +9,15 @@ import click
 from .config import DEFAULT_CONFIG_PATH, load_config, write_default_config
 from .metadata import manifest
 from .metadata import master
+from .audit import build_audit_report, format_audit_report
+from .tooling import build_tool_stack_report, format_tool_stack_report
 from .pipeline import (
     load_runtime as _load_runtime,
     run_build_derivatives,
     run_build_library,
     run_dedupe_exact,
     run_dedupe_near,
+    run_content_extraction,
     run_face_detection,
     run_ingest,
     run_metadata_repair,
@@ -50,6 +53,16 @@ def status_cmd(config_path: Path):
         click.echo(f"{key}: {value}")
 
 
+@app.command("doctor")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+def doctor_cmd(config_path: Path):
+    config, resolved = _load_runtime_config(config_path)
+    report = build_tool_stack_report(config.tools)
+    click.echo(format_tool_stack_report(report))
+    if not report.get("required_ready", False):
+        raise click.ClickException("Required media tools are missing.")
+
+
 @app.command("jobs")
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
 @click.option("--limit", default=20, show_default=True)
@@ -79,7 +92,7 @@ def ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[
 def plan_library_cmd(config_path: Path):
     try:
         result = run_plan_library(config_path)
-        click.echo(f"Planned managed assets: {result['planned_assets']}")
+        click.echo(f"Planned library items: {result['planned_assets']}")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -91,7 +104,20 @@ def plan_library_cmd(config_path: Path):
 def build_library_cmd(config_path: Path, limit: Optional[int], force: bool):
     try:
         result = run_build_library(config_path, limit=limit, force=force)
-        click.echo(f"Built managed assets: {result['processed_assets']}")
+        click.echo(f"Built library items: {result['processed_assets']}")
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@app.command("build-previews")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--limit", default=None, type=int)
+def build_previews_cmd(config_path: Path, limit: Optional[int]):
+    try:
+        result = run_build_derivatives(config_path, limit=limit)
+        click.echo(
+            f"Previews built={result['built']} failed={result['failed']} skipped={result['skipped']}"
+        )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -120,6 +146,21 @@ def repair_metadata_cmd(config_path: Path, limit: Optional[int]):
         raise click.ClickException(str(exc)) from exc
 
 
+@app.command("extract-content")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--limit", default=None, type=int)
+def extract_content_cmd(config_path: Path, limit: Optional[int]):
+    try:
+        result = run_content_extraction(config_path, limit=limit)
+        click.echo(
+            f"Content extraction processed={result['processed']} ocr={result['ocr_saved']} "
+            f"transcripts={result['transcript_saved']} text_embeddings={result['text_saved']} "
+            f"visual_embeddings={result['visual_saved']}"
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @app.command("detect-faces")
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
 @click.option("--limit", default=None, type=int)
@@ -127,6 +168,19 @@ def detect_faces_cmd(config_path: Path, limit: Optional[int]):
     try:
         result = run_face_detection(config_path, limit=limit)
         click.echo(f"Face detection processed={result['processed']} detected={result['detected']} failed={result['failed']}")
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@app.command("audit")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--sample-size", default=100, show_default=True, type=int)
+@click.option("--source", "sources", multiple=True)
+def audit_cmd(config_path: Path, sample_size: int, sources: tuple[str, ...]):
+    try:
+        _config, resolved, db_path = _load_runtime(config_path)
+        report = build_audit_report(db_path, sample_size=sample_size, sources=sources or None)
+        click.echo(format_audit_report(report))
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -142,7 +196,7 @@ def validate_library_cmd(config_path: Path, limit: Optional[int]):
         limit=limit,
     )
     click.echo(
-        f"Validated managed files: checked={result['checked']} present={result['present']} missing={result['missing']}"
+        f"Validated library files: checked={result['checked']} present={result['present']} missing={result['missing']}"
     )
 
 
