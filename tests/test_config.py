@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,10 @@ class ConfigTests(unittest.TestCase):
             self.assertIsNotNone(config.tools.exiftool)
             self.assertIsNotNone(config.tools.ffmpeg)
             self.assertIsNotNone(config.tools.tesseract)
+            self.assertEqual(config.tools.face_model, "antelopev2")
+
+            config.prepare_runtime_environment(resolved)
+            self.assertIn("insightface", Path(os.environ["INSIGHTFACE_HOME"]).name)
 
     def test_save_config_persists_updates(self):
         with tempfile.TemporaryDirectory() as tmp:

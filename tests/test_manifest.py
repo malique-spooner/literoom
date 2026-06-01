@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+import math
 from pathlib import Path
 
 from PIL import Image
@@ -518,7 +519,7 @@ class ManifestTests(unittest.TestCase):
             manifest.assign_face_identity(db_path, "face-a", identity_id)
             manifest.replace_duplicate_groups(
                 db_path,
-                group_type="NEAR_AHASH",
+                group_type="NEAR_VISUAL",
                 groups=[
                     {
                         "canonical_asset_id": asset["id"],
@@ -530,14 +531,419 @@ class ManifestTests(unittest.TestCase):
             )
 
             albums = manifest.list_person_albums(db_path)
+            named_albums = manifest.list_person_albums(db_path, status="CONFIRMED")
+            suggested_albums = manifest.list_person_albums(db_path, status="CLUSTERED")
             assets_for_person = manifest.list_assets_for_person(db_path, "Avery")
-            groups = manifest.list_duplicate_groups(db_path, min_score=0.9, group_type="NEAR_AHASH")
+            groups = manifest.list_duplicate_groups(db_path, min_score=0.9, group_type="NEAR_VISUAL")
             import_progress = manifest.get_import_progress(db_path)
+            face_overview = manifest.get_face_overview(db_path)
 
             self.assertEqual(albums[0]["label"], "Avery")
+            self.assertEqual(named_albums[0]["label"], "Avery")
+            self.assertEqual(suggested_albums, [])
             self.assertEqual(assets_for_person[0]["id"], asset["id"])
             self.assertEqual(len(groups), 1)
             self.assertGreater(import_progress["completion_pct"], 0)
+            self.assertEqual(face_overview["confirmed_identities"], 1)
+            self.assertGreaterEqual(face_overview["strong_clustered_identities"], 0)
+
+    def test_prepare_face_rerun_clears_machine_state_but_keeps_confirmed_people(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(3):
+                source = root / f"person-{idx}.jpg"
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10, include_hidden=True)}
+
+            confirmed_id = manifest.create_face_identity(db_path, "Malik", status="CONFIRMED")
+            clustered_id = manifest.create_face_identity(db_path, "Cluster 001", status="CLUSTERED")
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["person-0.jpg"]["id"],
+                [{"id": "face-confirmed", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["person-0.jpg"]["id"],
+                face_id="face-confirmed",
+                vector=[1.0, 0.0],
+                model_name="insightface_antelopev2",
+            )
+            manifest.assign_face_identity(db_path, "face-confirmed", confirmed_id)
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["person-1.jpg"]["id"],
+                [{"id": "face-clustered", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["person-1.jpg"]["id"],
+                face_id="face-clustered",
+                vector=[1.0, 0.0],
+                model_name="simple-face-v1",
+            )
+            manifest.update_face_cluster(db_path, "face-clustered", clustered_id, labeled=False)
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["person-2.jpg"]["id"],
+                [{"id": "face-review", "bbox": {}, "embedding_vector": [0.8, 0.2]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["person-2.jpg"]["id"],
+                face_id="face-review",
+                vector=[0.8, 0.2],
+                model_name="simple-face-v1",
+            )
+            manifest.save_face_clarification(
+                db_path,
+                "face-review",
+                suggested_identity_id=confirmed_id,
+                suggested_label="Malik",
+                score=0.82,
+                rationale="stale suggestion",
+            )
+
+            failed_job = manifest.create_job(db_path, "face_detection", {"force": True})
+            manifest.fail_job(db_path, failed_job, "vector mismatch", retryable=True)
+
+            result = manifest.prepare_face_rerun(db_path)
+            identities = manifest.list_face_identities(db_path, limit=10)
+            faces_after = {row["id"]: row for row in manifest.list_faces(db_path, limit=10, include_rejected=True)}
+            clarifications = manifest.list_face_clarifications(db_path, limit=10)
+            jobs = manifest.list_jobs(db_path, limit=10)
+
+            self.assertEqual(result["removed_identities"], 1)
+            self.assertEqual(result["cleared_jobs"], 1)
+            self.assertEqual([item["label"] for item in identities], ["Malik"])
+            self.assertEqual(faces_after["face-confirmed"]["identity_id"], confirmed_id)
+            self.assertEqual(faces_after["face-clustered"]["identity_id"], None)
+            self.assertEqual(faces_after["face-clustered"]["status"], "DETECTED")
+            self.assertEqual(faces_after["face-review"]["identity_id"], None)
+            self.assertEqual(faces_after["face-review"]["status"], "DETECTED")
+            self.assertEqual(clarifications, [])
+            self.assertEqual(jobs, [])
+
+    def test_get_identity_model_name_prefers_workspace_dominant_model_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(4):
+                source = root / f"model-{idx}.jpg"
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = manifest.list_assets(db_path, limit=10, include_hidden=True)
+
+            target_identity = manifest.create_face_identity(db_path, "Ethan", status="CONFIRMED")
+            other_identity = manifest.create_face_identity(db_path, "Other", status="CONFIRMED")
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets[0]["id"],
+                [{"id": "face-old", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets[0]["id"],
+                face_id="face-old",
+                vector=[1.0, 0.0],
+                model_name="simple-face-v1",
+            )
+            manifest.assign_face_identity(db_path, "face-old", target_identity)
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets[1]["id"],
+                [{"id": "face-new", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets[1]["id"],
+                face_id="face-new",
+                vector=[1.0, 0.0],
+                model_name="insightface_antelopev2",
+            )
+            manifest.assign_face_identity(db_path, "face-new", target_identity)
+
+            for index, asset in enumerate(assets[2:], start=2):
+                face_id = f"face-dominant-{index}"
+                manifest.replace_faces_for_asset(
+                    db_path,
+                    asset["id"],
+                    [{"id": face_id, "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                    source_name="test",
+                )
+                manifest.save_face_embedding(
+                    db_path,
+                    asset_id=asset["id"],
+                    face_id=face_id,
+                    vector=[1.0, 0.0],
+                    model_name="insightface_antelopev2",
+                )
+                manifest.assign_face_identity(db_path, face_id, other_identity)
+
+            self.assertEqual(manifest.get_preferred_face_model_name(db_path), "insightface_antelopev2")
+            self.assertEqual(manifest.get_identity_model_name(db_path, target_identity), "insightface_antelopev2")
+
+    def test_assign_face_identity_auto_assigns_high_confidence_confirmed_profile_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(2):
+                source = root / f"auto-{idx}.jpg"
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10, include_hidden=True)}
+
+            confirmed_id = manifest.create_face_identity(db_path, "Malik", status="CONFIRMED")
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["auto-0.jpg"]["id"],
+                [{"id": "face-confirmed", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["auto-0.jpg"]["id"],
+                face_id="face-confirmed",
+                vector=[1.0, 0.0],
+                model_name="insightface_antelopev2",
+            )
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["auto-1.jpg"]["id"],
+                [{"id": "face-candidate", "bbox": {}, "embedding_vector": [0.99, 0.14106735979665894]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["auto-1.jpg"]["id"],
+                face_id="face-candidate",
+                vector=[0.99, 0.14106735979665894],
+                model_name="insightface_antelopev2",
+            )
+
+            manifest.assign_face_identity(db_path, "face-confirmed", confirmed_id)
+
+            faces_after = {row["id"]: row for row in manifest.list_faces(db_path, limit=10, include_rejected=True)}
+            asset_after = manifest.get_asset(db_path, assets["auto-1.jpg"]["id"])
+
+            self.assertEqual(faces_after["face-candidate"]["identity_id"], confirmed_id)
+            self.assertEqual(faces_after["face-candidate"]["status"], "LABELED")
+            self.assertIn("Malik", asset_after["people_json"])
+
+    def test_assign_face_identity_keeps_lower_confidence_matches_in_review_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(2):
+                source = root / f"review-{idx}.jpg"
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10, include_hidden=True)}
+
+            confirmed_id = manifest.create_face_identity(db_path, "Ethan", status="CONFIRMED")
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["review-0.jpg"]["id"],
+                [{"id": "face-confirmed", "bbox": {}, "embedding_vector": [1.0, 0.0]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["review-0.jpg"]["id"],
+                face_id="face-confirmed",
+                vector=[1.0, 0.0],
+                model_name="insightface_antelopev2",
+            )
+
+            manifest.replace_faces_for_asset(
+                db_path,
+                assets["review-1.jpg"]["id"],
+                [{"id": "face-candidate", "bbox": {}, "embedding_vector": [0.95, 0.31224989991991997]}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=assets["review-1.jpg"]["id"],
+                face_id="face-candidate",
+                vector=[0.95, 0.31224989991991997],
+                model_name="insightface_antelopev2",
+            )
+
+            manifest.assign_face_identity(db_path, "face-confirmed", confirmed_id)
+
+            faces_after = {row["id"]: row for row in manifest.list_faces(db_path, limit=10, include_rejected=True)}
+            clarifications = manifest.list_face_clarifications(db_path, suggested_identity_id=confirmed_id)
+
+            self.assertIsNone(faces_after["face-candidate"]["identity_id"])
+            self.assertEqual(faces_after["face-candidate"]["status"], "REVIEW")
+            self.assertEqual(len(clarifications), 1)
+            self.assertEqual(clarifications[0]["face_id"], "face-candidate")
+
+    def test_confirmed_identity_auto_assigns_obvious_matches_after_profile_is_strong(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for idx in range(11):
+                source = root / f"strong-profile-{idx}.jpg"
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = {
+                row["orig_filename"]: row
+                for row in manifest.list_assets(db_path, limit=20, include_hidden=True)
+            }
+
+            confirmed_id = manifest.create_face_identity(db_path, "Malique", status="CONFIRMED")
+            seed_vector = [1.0, 0.0]
+            for idx in range(10):
+                face_id = f"face-confirmed-{idx}"
+                asset = assets[f"strong-profile-{idx}.jpg"]
+                manifest.replace_faces_for_asset(
+                    db_path,
+                    asset["id"],
+                    [{"id": face_id, "bbox": {}, "embedding_vector": seed_vector}],
+                    source_name="test",
+                )
+                manifest.save_face_embedding(
+                    db_path,
+                    asset_id=asset["id"],
+                    face_id=face_id,
+                    vector=seed_vector,
+                    model_name="insightface_antelopev2",
+                )
+                manifest.update_face_cluster(db_path, face_id, confirmed_id, labeled=True)
+
+            candidate_vector = [0.82, math.sqrt(1 - 0.82 * 0.82)]
+            candidate_asset = assets["strong-profile-10.jpg"]
+            manifest.replace_faces_for_asset(
+                db_path,
+                candidate_asset["id"],
+                [{"id": "face-candidate", "bbox": {}, "embedding_vector": candidate_vector}],
+                source_name="test",
+            )
+            manifest.save_face_embedding(
+                db_path,
+                asset_id=candidate_asset["id"],
+                face_id="face-candidate",
+                vector=candidate_vector,
+                model_name="insightface_antelopev2",
+            )
+
+            result = manifest.refresh_confirmed_identity_matches(db_path, confirmed_id)
+            faces_after = {row["id"]: row for row in manifest.list_faces(db_path, limit=20, include_rejected=True)}
+            asset_after = manifest.get_asset(db_path, candidate_asset["id"])
+
+            self.assertEqual(result["assigned"], 1)
+            self.assertEqual(faces_after["face-candidate"]["identity_id"], confirmed_id)
+            self.assertEqual(faces_after["face-candidate"]["status"], "LABELED")
+            self.assertIn("Malique", asset_after["people_json"])
 
 
 if __name__ == "__main__":

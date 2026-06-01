@@ -13,6 +13,7 @@ uvicorn
 opencv-python-headless
 openai-whisper
 open_clip_torch
+faiss-cpu
 ultralytics
 insightface
 paddleocr

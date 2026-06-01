@@ -1,0 +1,118 @@
+{
+  "rows": 52,
+  "recommended_auto_assign_threshold": 0.825,
+  "recommended_clarification_floor": 0.745,
+  "recommended_candidate_floor": 0.625,
+  "best_metrics": {
+    "threshold": 0.825,
+    "tp": 10.0,
+    "fp": 0.4,
+    "tn": 17.55,
+    "fn": 14.0,
+    "precision": 0.9615,
+    "recall": 0.4167,
+    "cost": 16.0
+  },
+  "top_candidates": [
+    {
+      "threshold": 0.825,
+      "tp": 10.0,
+      "fp": 0.4,
+      "tn": 17.55,
+      "fn": 14.0,
+      "precision": 0.9615,
+      "recall": 0.4167,
+      "cost": 16.0
+    },
+    {
+      "threshold": 0.83,
+      "tp": 7.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 17.0,
+      "precision": 1.0,
+      "recall": 0.2917,
+      "cost": 17.0
+    },
+    {
+      "threshold": 0.835,
+      "tp": 5.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 19.0,
+      "precision": 1.0,
+      "recall": 0.2083,
+      "cost": 19.0
+    },
+    {
+      "threshold": 0.82,
+      "tp": 14.0,
+      "fp": 1.85,
+      "tn": 16.1,
+      "fn": 10.0,
+      "precision": 0.8833,
+      "recall": 0.5833,
+      "cost": 19.25
+    },
+    {
+      "threshold": 0.84,
+      "tp": 3.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 21.0,
+      "precision": 1.0,
+      "recall": 0.125,
+      "cost": 21.0
+    },
+    {
+      "threshold": 0.845,
+      "tp": 1.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 23.0,
+      "precision": 1.0,
+      "recall": 0.0417,
+      "cost": 23.0
+    },
+    {
+      "threshold": 0.85,
+      "tp": 1.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 23.0,
+      "precision": 1.0,
+      "recall": 0.0417,
+      "cost": 23.0
+    },
+    {
+      "threshold": 0.855,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 24.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "cost": 24.0
+    },
+    {
+      "threshold": 0.86,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 24.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "cost": 24.0
+    },
+    {
+      "threshold": 0.865,
+      "tp": 0.0,
+      "fp": 0.0,
+      "tn": 17.95,
+      "fn": 24.0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "cost": 24.0
+    }
+  ]
+}

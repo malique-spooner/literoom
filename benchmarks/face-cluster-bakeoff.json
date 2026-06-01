@@ -1,0 +1,68 @@
+[
+  {
+    "method": "threshold_cc_relaxed",
+    "runtime_s": 0.03,
+    "qualified_clusters": 0,
+    "covered_faces": 0,
+    "covered_assets": 0,
+    "mean_cluster_faces": 0.0,
+    "max_cluster_faces": 0,
+    "mean_cluster_assets": 0.0,
+    "max_cluster_assets": 0,
+    "mean_pairwise_similarity": 0.0,
+    "p10_pairwise_similarity": 0.0,
+    "mean_nearest_other_centroid_similarity": 0.0
+  },
+  {
+    "method": "dbscan_cosine",
+    "runtime_s": 0.0,
+    "error": "scikit-learn is not installed"
+  },
+  {
+    "method": "agglomerative_complete",
+    "runtime_s": 0.0,
+    "error": "scikit-learn is not installed"
+  },
+  {
+    "method": "finch_like",
+    "runtime_s": 0.01,
+    "qualified_clusters": 0,
+    "covered_faces": 0,
+    "covered_assets": 0,
+    "mean_cluster_faces": 0.0,
+    "max_cluster_faces": 0,
+    "mean_cluster_assets": 0.0,
+    "max_cluster_assets": 0,
+    "mean_pairwise_similarity": 0.0,
+    "p10_pairwise_similarity": 0.0,
+    "mean_nearest_other_centroid_similarity": 0.0
+  },
+  {
+    "method": "chinese_whispers_knn",
+    "runtime_s": 0.44,
+    "qualified_clusters": 0,
+    "covered_faces": 0,
+    "covered_assets": 0,
+    "mean_cluster_faces": 0.0,
+    "max_cluster_faces": 0,
+    "mean_cluster_assets": 0.0,
+    "max_cluster_assets": 0,
+    "mean_pairwise_similarity": 0.0,
+    "p10_pairwise_similarity": 0.0,
+    "mean_nearest_other_centroid_similarity": 0.0
+  },
+  {
+    "method": "knn_density_graph",
+    "runtime_s": 0.42,
+    "qualified_clusters": 0,
+    "covered_faces": 0,
+    "covered_assets": 0,
+    "mean_cluster_faces": 0.0,
+    "max_cluster_faces": 0,
+    "mean_cluster_assets": 0.0,
+    "max_cluster_assets": 0,
+    "mean_pairwise_similarity": 0.0,
+    "p10_pairwise_similarity": 0.0,
+    "mean_nearest_other_centroid_similarity": 0.0
+  }
+]

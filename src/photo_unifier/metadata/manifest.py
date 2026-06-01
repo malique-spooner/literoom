@@ -11,6 +11,15 @@ from typing import Any, Dict, Iterator, List, Optional
 
 JOB_STATES = ("QUEUED", "RUNNING", "COMPLETED", "FAILED", "RETRYABLE")
 MANAGED_STATES = ("PLANNED", "BUILT", "MISSING", "FAILED")
+PERSON_CANDIDATE_SCORE_FLOOR = 0.60
+PERSON_CANDIDATE_CLARIFICATION_THRESHOLD = 0.72
+PERSON_CANDIDATE_LIMIT = 32
+PERSON_CANDIDATE_REFRESH_LIMIT = 120
+PERSON_CANDIDATE_REFRESH_MIN_THRESHOLD = 0.66
+PERSON_CANDIDATE_REFRESH_STEP = 0.02
+PERSON_AUTO_ASSIGN_THRESHOLD = 0.95
+PERSON_AUTO_ASSIGN_MIN_THRESHOLD = 0.50
+PERSON_AUTO_ASSIGN_STEP = 0.01
 
 CANONICAL_METADATA_STANDARD: List[Dict[str, Any]] = [
     {"field_name": "captured_at", "label": "Captured Time", "weight": 24, "media_types": ["image", "raw", "video"]},
@@ -42,6 +51,50 @@ CANONICAL_METADATA_STANDARD: List[Dict[str, Any]] = [
 
 def utcnow_iso() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    if not a or not b:
+        return 0.0
+    limit = min(len(a), len(b))
+    if limit <= 0:
+        return 0.0
+    dot = sum(float(a[i]) * float(b[i]) for i in range(limit))
+    an = sum(float(a[i]) * float(a[i]) for i in range(limit)) ** 0.5 or 1.0
+    bn = sum(float(b[i]) * float(b[i]) for i in range(limit)) ** 0.5 or 1.0
+    return dot / (an * bn)
+
+
+def _centroid_from_vectors(vectors: List[List[float]]) -> List[float]:
+    if not vectors:
+        return []
+    dim = max(len(vector) for vector in vectors)
+    centroid = [0.0] * dim
+    for vector in vectors:
+        for index, value in enumerate(vector[:dim]):
+            centroid[index] += float(value)
+    scale = float(len(vectors)) or 1.0
+    return [value / scale for value in centroid]
+
+
+def _average_centroid_similarity(vectors: List[List[float]]) -> float:
+    if len(vectors) < 2:
+        return 1.0
+    centroid = _centroid_from_vectors(vectors)
+    if not centroid:
+        return 0.0
+    scores = [_cosine_similarity(vector, centroid) for vector in vectors]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def _confirmed_auto_assign_threshold(
+    face_count: int,
+    vectors: List[List[float]],
+    *,
+    base_threshold: float = PERSON_AUTO_ASSIGN_THRESHOLD,
+) -> float:
+    profile_size = max(face_count, len(vectors))
+    return max(PERSON_AUTO_ASSIGN_MIN_THRESHOLD, base_threshold - max(0, profile_size - 5) * PERSON_AUTO_ASSIGN_STEP)
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -1268,6 +1321,30 @@ def set_metadata_field(
         con.close()
 
 
+def delete_metadata_field(
+    db_path: Path,
+    asset_id: str,
+    *,
+    field_name: str,
+    source_name: Optional[str] = None,
+    source_field: Optional[str] = None,
+) -> None:
+    con = connect(db_path)
+    try:
+        sql = "DELETE FROM metadata_fields WHERE asset_id = ? AND field_name = ?"
+        params: List[Any] = [asset_id, field_name]
+        if source_name is not None:
+            sql += " AND source_name = ?"
+            params.append(source_name)
+        if source_field is not None:
+            sql += " AND COALESCE(source_field, '') = COALESCE(?, '')"
+            params.append(source_field)
+        con.execute(sql, params)
+        con.commit()
+    finally:
+        con.close()
+
+
 def _capture_asset_mutation_snapshot(
     con: sqlite3.Connection,
     asset_id: str,
@@ -1426,6 +1503,63 @@ def _mutation_snapshot_for_people(con: sqlite3.Connection, asset_id: str) -> Dic
         columns=["people_json", "last_updated"],
         field_names=["people"],
     )
+
+
+def _sync_people_json_from_metadata(con: sqlite3.Connection, asset_id: str) -> List[str]:
+    rows = con.execute(
+        """
+        SELECT value_json, value_text
+        FROM metadata_fields
+        WHERE asset_id = ?
+          AND field_name = 'people'
+        ORDER BY created_at ASC, source_name ASC, source_field ASC
+        """,
+        (asset_id,),
+    ).fetchall()
+    labels: List[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        value: Any
+        raw_json = row["value_json"]
+        raw_text = row["value_text"]
+        if raw_json:
+            try:
+                value = json.loads(raw_json)
+            except Exception:
+                value = raw_json
+        else:
+            value = raw_text
+        for label in _coerce_str_list(value):
+            cleaned = label.strip()
+            key = cleaned.casefold()
+            if cleaned and key not in seen:
+                seen.add(key)
+                labels.append(cleaned)
+    labels = sorted(labels, key=lambda item: item.casefold())
+    con.execute(
+        "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
+        (json.dumps(labels), utcnow_iso(), asset_id),
+    )
+    return labels
+
+
+def _sync_people_label_for_asset(
+    con: sqlite3.Connection,
+    asset_id: str,
+    identity_id: str,
+    label: str,
+) -> None:
+    _record_metadata_field(
+        con,
+        asset_id=asset_id,
+        field_name="people",
+        value=label,
+        source_name="face_label",
+        source_field=identity_id,
+        is_canonical=False,
+        confidence=0.98,
+    )
+    _sync_people_json_from_metadata(con, asset_id)
 
 
 def _write_mutation_history(
@@ -1705,15 +1839,22 @@ def add_asset_person(
     con = connect(db_path)
     try:
         before = _mutation_snapshot_for_people(con, asset_id)
-        row = con.execute("SELECT people_json FROM assets WHERE id=?", (asset_id,)).fetchone()
-        people = _coerce_list(row["people_json"] if row else [])
+        row = con.execute(
+            """
+            SELECT value_json, value_text
+            FROM metadata_fields
+            WHERE asset_id = ?
+              AND field_name = 'people'
+              AND source_name = ?
+              AND source_field = ?
+            LIMIT 1
+            """,
+            (asset_id, source_name, source_field),
+        ).fetchone()
+        people = _coerce_list(json.loads(row["value_json"]) if row and row["value_json"] else row["value_text"] if row else [])
         if label not in people:
             people.append(label)
         people = sorted(set(people))
-        con.execute(
-            "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
-            (json.dumps(people), utcnow_iso(), asset_id),
-        )
         _record_metadata_field(
             con,
             asset_id=asset_id,
@@ -1724,6 +1865,7 @@ def add_asset_person(
             is_canonical=True,
             confidence=1.0,
         )
+        _sync_people_json_from_metadata(con, asset_id)
         after = _mutation_snapshot_for_people(con, asset_id)
         _write_mutation_history(
             con,
@@ -1752,23 +1894,43 @@ def remove_asset_person(
     con = connect(db_path)
     try:
         before = _mutation_snapshot_for_people(con, asset_id)
-        row = con.execute("SELECT people_json FROM assets WHERE id=?", (asset_id,)).fetchone()
-        people = _coerce_list(row["people_json"] if row else [])
+        row = con.execute(
+            """
+            SELECT value_json, value_text
+            FROM metadata_fields
+            WHERE asset_id = ?
+              AND field_name = 'people'
+              AND source_name = ?
+              AND source_field = ?
+            LIMIT 1
+            """,
+            (asset_id, source_name, source_field),
+        ).fetchone()
+        people = _coerce_list(json.loads(row["value_json"]) if row and row["value_json"] else row["value_text"] if row else [])
         people = [name for name in people if name != label]
-        con.execute(
-            "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
-            (json.dumps(sorted(set(people))), utcnow_iso(), asset_id),
-        )
-        _record_metadata_field(
-            con,
-            asset_id=asset_id,
-            field_name="people",
-            value=sorted(set(people)),
-            source_name=source_name,
-            source_field=source_field,
-            is_canonical=True,
-            confidence=1.0,
-        )
+        if people:
+            _record_metadata_field(
+                con,
+                asset_id=asset_id,
+                field_name="people",
+                value=sorted(set(people)),
+                source_name=source_name,
+                source_field=source_field,
+                is_canonical=True,
+                confidence=1.0,
+            )
+        else:
+            con.execute(
+                """
+                DELETE FROM metadata_fields
+                WHERE asset_id = ?
+                  AND field_name = 'people'
+                  AND source_name = ?
+                  AND COALESCE(source_field, '') = COALESCE(?, '')
+                """,
+                (asset_id, source_name, source_field),
+            )
+        _sync_people_json_from_metadata(con, asset_id)
         after = _mutation_snapshot_for_people(con, asset_id)
         _write_mutation_history(
             con,
@@ -1933,6 +2095,33 @@ def list_jobs(db_path: Path, limit: int = 20) -> List[Dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def clear_jobs(
+    db_path: Path,
+    *,
+    job_type: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+) -> int:
+    con = connect(db_path)
+    try:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if job_type:
+            clauses.append("job_type = ?")
+            params.append(job_type)
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+        sql = "DELETE FROM jobs"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        cur = con.execute(sql, params)
+        con.commit()
+        return int(cur.rowcount or 0)
     finally:
         con.close()
 
@@ -2335,7 +2524,7 @@ def count_assets(
 
 def _asset_order_clause(sort: str) -> str:
     return {
-        "recent": "a.dt_original DESC, a.id DESC",
+        "recent": "CASE WHEN COALESCE(m.status, '') = 'BUILT' THEN 0 ELSE 1 END, a.dt_original DESC, a.id DESC",
         "rated": "COALESCE(a.user_rating, 0) DESC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
         "favorites": "COALESCE(a.favorite, 0) DESC, COALESCE(a.user_rating, 0) DESC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
         "review": "COALESCE(a.user_rating, 0) ASC, COALESCE(a.review_score, 0) DESC, a.dt_original DESC, a.id DESC",
@@ -2724,30 +2913,73 @@ def list_faces(db_path: Path, limit: int = 50, *, include_rejected: bool = False
         con.close()
 
 
-def list_face_identities(db_path: Path, limit: int = 200) -> List[Dict[str, Any]]:
+def list_face_identities(
+    db_path: Path,
+    limit: int = 200,
+    *,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
-        rows = con.execute(
-            """
+        sql = """
             SELECT i.*, COUNT(f.id) AS face_count
             FROM face_identities i
             LEFT JOIN faces f ON f.identity_id = i.id
+        """
+        params: List[Any] = []
+        if status:
+            sql += " WHERE i.status = ?"
+            params.append(status)
+        sql += """
             GROUP BY i.id
             ORDER BY COUNT(f.id) DESC, i.label ASC
             LIMIT ?
-            """,
-            (limit,),
+        """
+        params.append(limit)
+        rows = con.execute(
+            sql,
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
         con.close()
 
 
-def list_face_clarifications(db_path: Path, *, limit: int = 200, status: str = "OPEN") -> List[Dict[str, Any]]:
+def get_face_identity(db_path: Path, identity_id: str) -> Optional[Dict[str, Any]]:
     con = connect(db_path)
     try:
-        rows = con.execute(
+        row = con.execute(
             """
+            SELECT i.*, COUNT(DISTINCT f.id) AS face_count, COUNT(DISTINCT f.asset_id) AS asset_count,
+                   MAX(f.created_at) AS last_seen_at
+            FROM face_identities i
+            LEFT JOIN faces f ON f.identity_id = i.id AND f.status <> 'REJECTED'
+            WHERE i.id = ?
+            GROUP BY i.id
+            """,
+            (identity_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def list_face_clarifications(
+    db_path: Path,
+    *,
+    limit: int = 200,
+    status: str = "OPEN",
+    suggested_identity_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        clause = "WHERE c.status = ?"
+        params: list[Any] = [status]
+        if suggested_identity_id:
+            clause += " AND c.suggested_identity_id = ?"
+            params.append(suggested_identity_id)
+        rows = con.execute(
+            f"""
             SELECT c.*, f.asset_id, f.identity_id, f.status AS face_status, f.bbox_json,
                    a.orig_filename, a.media_type, m.managed_path, t.path AS thumbnail_path,
                    i.label AS suggested_identity_label
@@ -2757,11 +2989,11 @@ def list_face_clarifications(db_path: Path, *, limit: int = 200, status: str = "
             LEFT JOIN assets a ON a.id = f.asset_id
             LEFT JOIN managed_assets m ON m.asset_id = a.id
             LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
-            WHERE c.status = ?
+            {clause}
             ORDER BY c.score DESC, c.created_at DESC
             LIMIT ?
             """,
-            (status, limit),
+            (*params, limit),
         ).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -2972,20 +3204,23 @@ def list_asset_embeddings(db_path: Path, asset_id: str, *, embedding_type: Optio
         con.close()
 
 
-def list_face_embeddings(db_path: Path) -> List[Dict[str, Any]]:
+def list_face_embeddings(db_path: Path, *, model_name: Optional[str] = None) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
-        rows = con.execute(
-            """
+        sql = """
             SELECT f.id AS face_id, f.asset_id, f.identity_id, f.status, e.id AS embedding_id,
                    e.model_name, e.payload_json
             FROM faces f
             JOIN embeddings e ON e.id = f.embedding_ref
             WHERE f.status <> 'REJECTED'
               AND e.embedding_type = 'face'
-            ORDER BY f.created_at ASC
-            """
-        ).fetchall()
+        """
+        params: list[Any] = []
+        if model_name:
+            sql += " AND e.model_name = ?"
+            params.append(model_name)
+        sql += " ORDER BY f.created_at ASC"
+        rows = con.execute(sql, params).fetchall()
         out: List[Dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -3085,6 +3320,51 @@ def rename_face_identity(db_path: Path, identity_id: str, label: str, *, status:
         con.commit()
     finally:
         con.close()
+    refresh_people_for_identity(db_path, identity_id)
+    refresh_confirmed_identity_matches(db_path, identity_id)
+
+
+def merge_face_identities(db_path: Path, source_identity_id: str, target_identity_id: str) -> None:
+    if source_identity_id == target_identity_id:
+        return
+    con = connect(db_path)
+    try:
+        source = con.execute("SELECT label FROM face_identities WHERE id=?", (source_identity_id,)).fetchone()
+        target = con.execute("SELECT label FROM face_identities WHERE id=?", (target_identity_id,)).fetchone()
+        if not source or not target:
+            raise ValueError("face identity not found")
+        asset_rows = con.execute(
+            "SELECT DISTINCT asset_id FROM faces WHERE identity_id=? AND status <> 'REJECTED'",
+            (source_identity_id,),
+        ).fetchall()
+        con.execute(
+            "UPDATE faces SET identity_id=? WHERE identity_id=?",
+            (target_identity_id, source_identity_id),
+        )
+        con.execute(
+            "UPDATE face_clarifications SET suggested_identity_id=? WHERE suggested_identity_id=?",
+            (target_identity_id, source_identity_id),
+        )
+        con.execute("DELETE FROM face_identities WHERE id=?", (source_identity_id,))
+        for asset_row in asset_rows:
+            asset_id = asset_row["asset_id"]
+            con.execute(
+                """
+                DELETE FROM metadata_fields
+                WHERE asset_id = ?
+                  AND field_name = 'people'
+                  AND source_name = 'face_label'
+                  AND COALESCE(source_field, '') = COALESCE(?, '')
+                """,
+                (asset_id, source_identity_id),
+            )
+            _sync_people_label_for_asset(con, asset_id, target_identity_id, target["label"])
+            _sync_people_json_from_metadata(con, asset_id)
+        con.commit()
+    finally:
+        con.close()
+    refresh_people_for_identity(db_path, target_identity_id)
+    refresh_confirmed_identity_matches(db_path, target_identity_id)
 
 
 def apply_identity_to_assets(db_path: Path, identity_id: str) -> None:
@@ -3093,31 +3373,12 @@ def apply_identity_to_assets(db_path: Path, identity_id: str) -> None:
         identity = con.execute("SELECT label FROM face_identities WHERE id=?", (identity_id,)).fetchone()
         if not identity:
             raise ValueError("identity not found")
-        label = identity["label"]
         asset_rows = con.execute(
             "SELECT DISTINCT asset_id FROM faces WHERE identity_id=? AND status <> 'REJECTED'",
             (identity_id,),
         ).fetchall()
         for asset_row in asset_rows:
-            asset_id = asset_row["asset_id"]
-            row = con.execute("SELECT people_json FROM assets WHERE id=?", (asset_id,)).fetchone()
-            people = _coerce_list(row["people_json"] if row else [])
-            if label not in people:
-                people.append(label)
-            con.execute(
-                "UPDATE assets SET people_json=?, last_updated=? WHERE id=?",
-                (json.dumps(sorted(set(people))), utcnow_iso(), asset_id),
-            )
-            _record_metadata_field(
-                con,
-                asset_id=asset_id,
-                field_name="people",
-                value=sorted(set(people)),
-                source_name="face_label",
-                source_field=label,
-                is_canonical=True,
-                confidence=0.98,
-            )
+            _sync_people_label_for_asset(con, asset_row["asset_id"], identity_id, identity["label"])
         con.execute(
             "UPDATE faces SET status='LABELED' WHERE identity_id=? AND status <> 'REJECTED'",
             (identity_id,),
@@ -3125,6 +3386,25 @@ def apply_identity_to_assets(db_path: Path, identity_id: str) -> None:
         con.commit()
     finally:
         con.close()
+    refresh_confirmed_identity_matches(db_path, identity_id)
+
+
+def refresh_people_for_identity(db_path: Path, identity_id: str) -> None:
+    con = connect(db_path)
+    try:
+        identity = con.execute("SELECT label FROM face_identities WHERE id=?", (identity_id,)).fetchone()
+        if not identity:
+            return
+        asset_rows = con.execute(
+            "SELECT DISTINCT asset_id FROM faces WHERE identity_id=? AND status <> 'REJECTED'",
+            (identity_id,),
+        ).fetchall()
+        for asset_row in asset_rows:
+            _sync_people_label_for_asset(con, asset_row["asset_id"], identity_id, identity["label"])
+        con.commit()
+    finally:
+        con.close()
+    refresh_confirmed_identity_matches(db_path, identity_id)
 
 
 def replace_faces_for_asset(
@@ -3136,6 +3416,28 @@ def replace_faces_for_asset(
 ) -> int:
     con = connect(db_path)
     try:
+        prior_identity_rows = con.execute(
+            """
+            SELECT DISTINCT identity_id
+            FROM faces
+            WHERE asset_id=?
+              AND identity_id IS NOT NULL
+            """,
+            (asset_id,),
+        ).fetchall()
+        prior_identity_ids = [str(row["identity_id"]) for row in prior_identity_rows if row["identity_id"]]
+        if prior_identity_ids:
+            placeholders = ", ".join("?" for _ in prior_identity_ids)
+            con.execute(
+                f"""
+                DELETE FROM metadata_fields
+                WHERE asset_id = ?
+                  AND field_name = 'people'
+                  AND source_name = 'face_label'
+                  AND source_field IN ({placeholders})
+                """,
+                (asset_id, *prior_identity_ids),
+            )
         con.execute("DELETE FROM faces WHERE asset_id=?", (asset_id,))
         created = 0
         for detection in detections:
@@ -3154,6 +3456,7 @@ def replace_faces_for_asset(
                 ),
             )
             created += 1
+        _sync_people_json_from_metadata(con, asset_id)
         con.commit()
         return created
     finally:
@@ -3211,6 +3514,29 @@ def reject_face(db_path: Path, face_id: str) -> None:
         con.close()
 
 
+def dismiss_face_suggestion(db_path: Path, face_id: str) -> None:
+    con = connect(db_path)
+    try:
+        con.execute(
+            """
+            UPDATE faces
+            SET status = CASE
+                WHEN identity_id IS NULL THEN 'DETECTED'
+                ELSE status
+            END
+            WHERE id = ?
+            """,
+            (face_id,),
+        )
+        con.execute(
+            "UPDATE face_clarifications SET status='DISMISSED', resolved_at=? WHERE face_id=?",
+            (utcnow_iso(), face_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def get_face(db_path: Path, face_id: str) -> Optional[Dict[str, Any]]:
     con = connect(db_path)
     try:
@@ -3243,6 +3569,20 @@ def get_face_overview(db_path: Path) -> Dict[str, Any]:
         rejected = con.execute("SELECT COUNT(*) FROM faces WHERE status='REJECTED'").fetchone()[0]
         assets = con.execute("SELECT COUNT(DISTINCT asset_id) FROM faces WHERE status <> 'REJECTED'").fetchone()[0]
         identities = con.execute("SELECT COUNT(*) FROM face_identities").fetchone()[0]
+        confirmed_identities = con.execute("SELECT COUNT(*) FROM face_identities WHERE status='CONFIRMED'").fetchone()[0]
+        clustered_identities = con.execute("SELECT COUNT(*) FROM face_identities WHERE status='CLUSTERED'").fetchone()[0]
+        strong_clustered_identities = con.execute(
+            """
+            SELECT COUNT(*) FROM (
+              SELECT i.id
+              FROM face_identities i
+              LEFT JOIN faces f ON f.identity_id = i.id AND f.status <> 'REJECTED'
+              WHERE i.status = 'CLUSTERED'
+              GROUP BY i.id
+              HAVING COUNT(f.id) >= 3
+            )
+            """
+        ).fetchone()[0]
         clarifications = con.execute("SELECT COUNT(*) FROM face_clarifications WHERE status='OPEN'").fetchone()[0]
         return {
             "total_faces": total,
@@ -3254,6 +3594,9 @@ def get_face_overview(db_path: Path) -> Dict[str, Any]:
             "clarifications_open": clarifications,
             "assets_with_faces": assets,
             "identities": identities,
+            "confirmed_identities": confirmed_identities,
+            "clustered_identities": clustered_identities,
+            "strong_clustered_identities": strong_clustered_identities,
         }
     finally:
         con.close()
@@ -3264,14 +3607,19 @@ def list_person_albums(
     *,
     limit: int = 100,
     query: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     con = connect(db_path)
     try:
         params: List[Any] = []
-        clause = ""
+        clauses: List[str] = []
         if query:
-            clause = "WHERE lower(i.label) LIKE ?"
+            clauses.append("lower(i.label) LIKE ?")
             params.append(f"%{query.lower()}%")
+        if status:
+            clauses.append("i.status = ?")
+            params.append(status)
+        clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = con.execute(
             f"""
             SELECT i.id, i.label, i.status, COUNT(DISTINCT f.id) AS face_count,
@@ -3297,7 +3645,7 @@ def list_person_albums(
             LEFT JOIN faces f ON f.identity_id = i.id AND f.status <> 'REJECTED'
             {clause}
             GROUP BY i.id
-            HAVING COUNT(DISTINCT f.id) > 0
+            {'' if status == 'CONFIRMED' else 'HAVING COUNT(DISTINCT f.id) > 0'}
             ORDER BY COUNT(DISTINCT f.id) DESC, i.label ASC
             LIMIT ?
             """,
@@ -3330,6 +3678,488 @@ def list_assets_for_person(db_path: Path, label: str, *, limit: int = 48) -> Lis
             (label, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_assets_tagged_with_person(db_path: Path, label: str, *, limit: int = 48) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT a.id, a.orig_filename, a.media_type, a.dt_original, a.status,
+                   a.user_rating, a.review_state, a.favorite, a.people_json, m.managed_path
+            FROM assets a
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE lower(COALESCE(a.people_json, '')) LIKE ?
+            ORDER BY a.dt_original DESC, a.id DESC
+            LIMIT ?
+            """,
+            (f"%{label.lower()}%", limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_assets_for_identity(db_path: Path, identity_id: str, *, limit: int = 48) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT a.id, a.orig_filename, a.media_type, a.dt_original, a.status,
+                   a.user_rating, a.review_state, a.favorite, m.managed_path,
+                   MAX(f.created_at) AS last_seen_at,
+                   COUNT(f.id) AS face_count
+            FROM faces f
+            JOIN face_identities i ON i.id = f.identity_id
+            JOIN assets a ON a.id = f.asset_id
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE i.id = ?
+              AND f.status <> 'REJECTED'
+            GROUP BY a.id
+            ORDER BY MAX(f.created_at) DESC, a.dt_original DESC, a.id DESC
+            LIMIT ?
+            """,
+            (identity_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def get_identity_model_name(db_path: Path, identity_id: str) -> Optional[str]:
+    con = connect(db_path)
+    try:
+        preferred_model_name = get_preferred_face_model_name(db_path)
+        if preferred_model_name:
+            preferred = con.execute(
+                """
+                SELECT 1
+                FROM faces f
+                JOIN embeddings e ON e.id = f.embedding_ref
+                WHERE f.identity_id = ?
+                  AND f.status <> 'REJECTED'
+                  AND e.embedding_type = 'face'
+                  AND e.model_name = ?
+                LIMIT 1
+                """,
+                (identity_id, preferred_model_name),
+            ).fetchone()
+            if preferred:
+                return preferred_model_name
+        row = con.execute(
+            """
+            SELECT e.model_name, COUNT(*) AS count
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            WHERE f.identity_id = ?
+              AND f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND COALESCE(e.model_name, '') <> ''
+            GROUP BY e.model_name
+            ORDER BY count DESC, e.model_name ASC
+            LIMIT 1
+            """,
+            (identity_id,),
+        ).fetchone()
+        return str(row["model_name"]) if row else None
+    finally:
+        con.close()
+
+
+def get_preferred_face_model_name(db_path: Path) -> Optional[str]:
+    con = connect(db_path)
+    try:
+        row = con.execute(
+            """
+            SELECT e.model_name, COUNT(*) AS count, MAX(e.created_at) AS last_seen_at
+            FROM embeddings e
+            WHERE e.embedding_type = 'face'
+              AND COALESCE(e.model_name, '') <> ''
+            GROUP BY e.model_name
+            ORDER BY count DESC, last_seen_at DESC, e.model_name ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        return str(row["model_name"]) if row else None
+    finally:
+        con.close()
+
+
+def refresh_confirmed_identity_matches(
+    db_path: Path,
+    identity_id: str,
+    *,
+    auto_assign_threshold: float = PERSON_AUTO_ASSIGN_THRESHOLD,
+) -> Dict[str, int]:
+    identity = get_face_identity(db_path, identity_id)
+    if not identity:
+        return {"assigned": 0, "clarified": 0}
+    if str(identity.get("status") or "") != "CONFIRMED":
+        return {"assigned": 0, "clarified": 0}
+    model_name = get_identity_model_name(db_path, identity_id)
+    if not model_name:
+        return {"assigned": 0, "clarified": 0}
+
+    con = connect(db_path)
+    try:
+        own_embeddings = con.execute(
+            """
+            SELECT e.payload_json
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            WHERE f.identity_id = ?
+              AND f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND e.model_name = ?
+            """,
+            (identity_id, model_name),
+        ).fetchall()
+        vectors: List[List[float]] = []
+        for row in own_embeddings:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            vector = payload.get("vector") or []
+            if vector:
+                vectors.append([float(value) for value in vector])
+        if not vectors:
+            return {"assigned": 0, "clarified": 0}
+
+        centroid = _centroid_from_vectors(vectors)
+
+        face_count = max(0, int(identity.get("face_count") or 0))
+        adaptive_auto_assign_threshold = _confirmed_auto_assign_threshold(
+            face_count,
+            vectors,
+            base_threshold=auto_assign_threshold,
+        )
+
+        face_rows = con.execute(
+            """
+            SELECT f.id AS face_id, f.asset_id, e.payload_json
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            WHERE f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND e.model_name = ?
+              AND f.identity_id IS NULL
+            ORDER BY f.created_at DESC
+            """,
+            (model_name,),
+        ).fetchall()
+
+        assigned = 0
+        touched_assets: set[str] = set()
+        label = str(identity.get("label") or "")
+        resolved_at = utcnow_iso()
+        for row in face_rows:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            vector = payload.get("vector") or []
+            if not vector:
+                continue
+            score = _cosine_similarity(vector, centroid)
+            if score < adaptive_auto_assign_threshold:
+                continue
+            con.execute(
+                "UPDATE faces SET identity_id=?, status='LABELED' WHERE id=?",
+                (identity_id, row["face_id"]),
+            )
+            con.execute(
+                "UPDATE face_clarifications SET status='RESOLVED', resolved_at=? WHERE face_id=?",
+                (resolved_at, row["face_id"]),
+            )
+            asset_id = str(row["asset_id"])
+            touched_assets.add(asset_id)
+            _sync_people_label_for_asset(con, asset_id, identity_id, label)
+            assigned += 1
+        for asset_id in touched_assets:
+            _sync_people_json_from_metadata(con, asset_id)
+        con.commit()
+    finally:
+        con.close()
+
+    return {"assigned": assigned, "clarified": 0}
+
+
+def prepare_face_rerun(db_path: Path) -> Dict[str, Any]:
+    init_db(db_path)
+    con = connect(db_path)
+    try:
+        cluster_rows = con.execute(
+            "SELECT id FROM face_identities WHERE status <> 'CONFIRMED'"
+        ).fetchall()
+        cluster_identity_ids = [str(row["id"]) for row in cluster_rows if row["id"]]
+        affected_asset_rows = con.execute(
+            """
+            SELECT DISTINCT asset_id
+            FROM faces
+            WHERE (status = 'REVIEW' AND identity_id IS NULL)
+               OR identity_id IN (
+                    SELECT id FROM face_identities WHERE status <> 'CONFIRMED'
+               )
+            """
+        ).fetchall()
+        affected_asset_ids = [str(row["asset_id"]) for row in affected_asset_rows if row["asset_id"]]
+
+        cleared_faces = con.execute(
+            """
+            UPDATE faces
+            SET identity_id = NULL,
+                status = 'DETECTED'
+            WHERE (status = 'REVIEW' AND identity_id IS NULL)
+               OR identity_id IN (
+                    SELECT id FROM face_identities WHERE status <> 'CONFIRMED'
+               )
+            """
+        ).rowcount or 0
+
+        cleared_clarifications = con.execute("DELETE FROM face_clarifications").rowcount or 0
+
+        if cluster_identity_ids:
+            placeholders = ", ".join("?" for _ in cluster_identity_ids)
+            con.execute(
+                f"""
+                DELETE FROM metadata_fields
+                WHERE field_name = 'people'
+                  AND source_name = 'face_label'
+                  AND source_field IN ({placeholders})
+                """,
+                cluster_identity_ids,
+            )
+
+        removed_identities = con.execute(
+            "DELETE FROM face_identities WHERE status <> 'CONFIRMED'"
+        ).rowcount or 0
+
+        for asset_id in affected_asset_ids:
+            _sync_people_json_from_metadata(con, asset_id)
+
+        con.commit()
+    finally:
+        con.close()
+
+    cleared_jobs = clear_jobs(db_path, job_type="face_detection", statuses=["RETRYABLE", "FAILED"])
+    return {
+        "cleared_faces": int(cleared_faces),
+        "cleared_clarifications": int(cleared_clarifications),
+        "removed_identities": int(removed_identities),
+        "affected_assets": len(affected_asset_ids),
+        "cleared_jobs": int(cleared_jobs),
+        "preferred_model_name": get_preferred_face_model_name(db_path),
+    }
+
+
+def list_person_candidate_faces(db_path: Path, identity_id: str, *, limit: int = PERSON_CANDIDATE_LIMIT) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        identity = con.execute("SELECT label FROM face_identities WHERE id=?", (identity_id,)).fetchone()
+        if not identity:
+            return []
+        model_name = get_identity_model_name(db_path, identity_id)
+        if not model_name:
+            return []
+        own_embeddings = con.execute(
+            """
+            SELECT e.payload_json
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            WHERE f.identity_id = ?
+              AND f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND e.model_name = ?
+            """,
+            (identity_id, model_name),
+        ).fetchall()
+        vectors: List[List[float]] = []
+        for row in own_embeddings:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            vector = payload.get("vector") or []
+            if vector:
+                vectors.append([float(value) for value in vector])
+        if not vectors:
+            return []
+        dim = max(len(vector) for vector in vectors)
+        centroid = [0.0] * dim
+        for vector in vectors:
+            for index, value in enumerate(vector[:dim]):
+                centroid[index] += float(value)
+        scale = float(len(vectors)) or 1.0
+        centroid = [value / scale for value in centroid]
+        face_rows = con.execute(
+            """
+            SELECT f.id AS face_id, f.asset_id, f.identity_id, f.status, f.created_at,
+                   e.payload_json, e.model_name,
+                   a.orig_filename, a.media_type, m.managed_path,
+                   t.path AS thumbnail_path,
+                   i.label AS identity_label, i.status AS identity_status
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            LEFT JOIN assets a ON a.id = f.asset_id
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            LEFT JOIN thumbnails t ON t.asset_id = a.id AND t.kind IN ('primary', 'video_preview')
+            LEFT JOIN face_identities i ON i.id = f.identity_id
+            WHERE f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND e.model_name = ?
+              AND f.identity_id IS NULL
+            ORDER BY f.created_at DESC
+            """,
+            (model_name,),
+        ).fetchall()
+        ranked: List[Dict[str, Any]] = []
+        for row in face_rows:
+            item = dict(row)
+            try:
+                payload = json.loads(item.get("payload_json") or "{}")
+            except Exception:
+                payload = {}
+            vector = payload.get("vector") or []
+            if not vector:
+                continue
+            score = _cosine_similarity(vector, centroid)
+            if score < PERSON_CANDIDATE_SCORE_FLOOR:
+                continue
+            item["vector"] = vector
+            item["score"] = score
+            ranked.append(item)
+        ranked.sort(key=lambda item: (float(item.get("score") or 0.0), str(item.get("created_at") or "")), reverse=True)
+        return ranked[:limit]
+    finally:
+        con.close()
+
+
+def refresh_person_candidate_clarifications(
+    db_path: Path,
+    identity_id: str,
+    *,
+    limit: int = PERSON_CANDIDATE_REFRESH_LIMIT,
+    threshold: float = PERSON_CANDIDATE_CLARIFICATION_THRESHOLD,
+) -> int:
+    return 0
+
+
+def list_related_identity_candidates(
+    db_path: Path,
+    identity_id: str,
+    *,
+    limit: int = 12,
+    threshold: float = 0.72,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        model_name = get_identity_model_name(db_path, identity_id)
+        if not model_name:
+            return []
+        own_embeddings = con.execute(
+            """
+            SELECT e.payload_json
+            FROM faces f
+            JOIN embeddings e ON e.id = f.embedding_ref
+            WHERE f.identity_id = ?
+              AND f.status <> 'REJECTED'
+              AND e.embedding_type = 'face'
+              AND e.model_name = ?
+            """,
+            (identity_id, model_name),
+        ).fetchall()
+        own_vectors: List[List[float]] = []
+        for row in own_embeddings:
+            try:
+                payload = json.loads(row["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            vector = payload.get("vector") or []
+            if vector:
+                own_vectors.append([float(value) for value in vector])
+        if not own_vectors:
+            return []
+        dim = max(len(vector) for vector in own_vectors)
+        target_centroid = [0.0] * dim
+        for vector in own_vectors:
+            for index, value in enumerate(vector[:dim]):
+                target_centroid[index] += float(value)
+        scale = float(len(own_vectors)) or 1.0
+        target_centroid = [value / scale for value in target_centroid]
+        identity_rows = con.execute(
+            """
+            SELECT i.id, i.label, i.status,
+                   COUNT(DISTINCT f.id) AS face_count,
+                   COUNT(DISTINCT f.asset_id) AS asset_count,
+                   MAX(f.created_at) AS last_seen_at,
+                   (
+                     SELECT f2.asset_id
+                     FROM faces f2
+                     WHERE f2.identity_id = i.id
+                       AND f2.status <> 'REJECTED'
+                     ORDER BY f2.created_at DESC
+                     LIMIT 1
+                   ) AS cover_asset_id,
+                   (
+                     SELECT f2.id
+                     FROM faces f2
+                     WHERE f2.identity_id = i.id
+                       AND f2.status <> 'REJECTED'
+                     ORDER BY f2.created_at DESC
+                     LIMIT 1
+                   ) AS cover_face_id
+            FROM face_identities i
+            JOIN faces f ON f.identity_id = i.id AND f.status <> 'REJECTED'
+            WHERE i.id <> ?
+              AND i.status = 'CLUSTERED'
+            GROUP BY i.id
+            ORDER BY face_count DESC, asset_count DESC, i.label ASC
+            """,
+            (identity_id,),
+        ).fetchall()
+        ranked: List[Dict[str, Any]] = []
+        for row in identity_rows:
+            embedding_rows = con.execute(
+                """
+                SELECT e.payload_json
+                FROM faces f
+                JOIN embeddings e ON e.id = f.embedding_ref
+                WHERE f.identity_id = ?
+                  AND f.status <> 'REJECTED'
+                  AND e.embedding_type = 'face'
+                  AND e.model_name = ?
+                """,
+                (row["id"], model_name),
+            ).fetchall()
+            vectors: List[List[float]] = []
+            for embedding_row in embedding_rows:
+                try:
+                    payload = json.loads(embedding_row["payload_json"] or "{}")
+                except Exception:
+                    payload = {}
+                vector = payload.get("vector") or []
+                if vector:
+                    vectors.append([float(value) for value in vector])
+            if not vectors:
+                continue
+            other_dim = max(len(vector) for vector in vectors)
+            centroid = [0.0] * other_dim
+            for vector in vectors:
+                for index, value in enumerate(vector[:other_dim]):
+                    centroid[index] += float(value)
+            other_scale = float(len(vectors)) or 1.0
+            centroid = [value / other_scale for value in centroid]
+            score = _cosine_similarity(target_centroid, centroid)
+            if score < threshold:
+                continue
+            item = dict(row)
+            item["score"] = score
+            ranked.append(item)
+        ranked.sort(key=lambda item: (float(item.get("score") or 0.0), int(item.get("face_count") or 0)), reverse=True)
+        return ranked[:limit]
     finally:
         con.close()
 
@@ -3409,6 +4239,172 @@ def iter_built_assets(db_path: Path, limit: int | None = None) -> Iterator[Dict[
             sql += f" LIMIT {int(limit)}"
         for row in con.execute(sql):
             yield dict(row)
+    finally:
+        con.close()
+
+
+def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _sequence_candidate_score(left: Dict[str, Any], right: Dict[str, Any]) -> tuple[float, str]:
+    left_dt = _parse_iso_dt(left.get("dt_original"))
+    right_dt = _parse_iso_dt(right.get("dt_original"))
+    gap_seconds = abs((right_dt - left_dt).total_seconds()) if left_dt and right_dt else None
+    if gap_seconds is None or gap_seconds > 180:
+        return 0.0, "time gap too wide"
+
+    score = 0.55
+    rationale_bits: list[str] = []
+    if left.get("source_locator") and left.get("source_locator") == right.get("source_locator"):
+        score += 0.12
+        rationale_bits.append("same export")
+    if left.get("source_root") and left.get("source_root") == right.get("source_root"):
+        score += 0.05
+        rationale_bits.append("same root")
+    if left_dt and right_dt and left_dt.date() == right_dt.date():
+        score += 0.05
+        rationale_bits.append("same day")
+    if gap_seconds <= 10:
+        score += 0.15
+    elif gap_seconds <= 30:
+        score += 0.10
+    elif gap_seconds <= 60:
+        score += 0.06
+    else:
+        score += 0.03
+    size_left = float(left.get("orig_size") or 0)
+    size_right = float(right.get("orig_size") or 0)
+    if size_left > 0 and size_right > 0:
+        ratio = min(size_left, size_right) / max(size_left, size_right)
+        if ratio >= 0.95:
+            score += 0.05
+            rationale_bits.append("similar size")
+        elif ratio >= 0.80:
+            score += 0.03
+            rationale_bits.append("close size")
+    score = min(score, 0.95)
+    rationale = f"gap={int(gap_seconds)}s" + (f"; {'; '.join(rationale_bits)}" if rationale_bits else "")
+    return round(score, 3), rationale
+
+
+def build_snapchat_sequence_groups(db_path: Path, *, limit: Optional[int] = None) -> int:
+    con = connect(db_path)
+    try:
+        exact_asset_rows = con.execute(
+            """
+            SELECT di.asset_id
+            FROM duplicate_groups g
+            JOIN duplicate_items di ON di.group_id = g.id
+            WHERE g.group_type = 'EXACT_SHA256'
+              AND g.status = 'OPEN'
+            """
+        ).fetchall()
+        exact_asset_ids = {row["asset_id"] for row in exact_asset_rows}
+        params: list[Any] = []
+        sql = """
+            SELECT a.id, a.source, a.source_locator, a.source_root, a.media_type,
+                   a.orig_filename, a.orig_size, a.dt_original
+            FROM assets a
+            WHERE a.source = 'snapchat'
+              AND a.media_type = 'video'
+              AND a.dt_original IS NOT NULL
+        """
+        if exact_asset_ids:
+            placeholders = ",".join("?" for _ in exact_asset_ids)
+            sql += f" AND a.id NOT IN ({placeholders})"
+            params.extend(sorted(exact_asset_ids))
+        sql += " ORDER BY COALESCE(a.source_locator, ''), a.dt_original ASC, a.orig_size DESC, a.id ASC"
+        rows = [dict(row) for row in con.execute(sql, tuple(params)).fetchall()]
+        if limit is not None:
+            rows = rows[: int(limit)]
+
+        by_source: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            key = str(row.get("source_locator") or row.get("source_root") or "")
+            by_source.setdefault(key, []).append(row)
+
+        groups: list[dict[str, Any]] = []
+        for items in by_source.values():
+            if len(items) < 2:
+                continue
+            parent: dict[str, str] = {item["id"]: item["id"] for item in items}
+
+            def find(node: str) -> str:
+                while parent[node] != node:
+                    parent[node] = parent[parent[node]]
+                    node = parent[node]
+                return node
+
+            def union(left: str, right: str) -> None:
+                root_left = find(left)
+                root_right = find(right)
+                if root_left != root_right:
+                    parent[root_right] = root_left
+
+            for index, left in enumerate(items):
+                for right in items[index + 1 :]:
+                    score, _rationale = _sequence_candidate_score(left, right)
+                    if score >= 0.68:
+                        union(left["id"], right["id"])
+                    else:
+                        left_dt = _parse_iso_dt(left.get("dt_original"))
+                        right_dt = _parse_iso_dt(right.get("dt_original"))
+                        if left_dt and right_dt and abs((right_dt - left_dt).total_seconds()) > 180:
+                            break
+
+            clusters: dict[str, list[dict[str, Any]]] = {}
+            for item in items:
+                clusters.setdefault(find(item["id"]), []).append(item)
+
+            for cluster_items in clusters.values():
+                if len(cluster_items) < 2:
+                    continue
+                ranked = sorted(
+                    cluster_items,
+                    key=lambda item: (
+                        -(item.get("orig_size") or 0),
+                        item.get("dt_original") or "",
+                        item["id"],
+                    ),
+                )
+                canonical_asset_id = ranked[0]["id"]
+                group_items: list[dict[str, Any]] = []
+                for item in ranked:
+                    if item["id"] == canonical_asset_id:
+                        group_items.append(
+                            {
+                                "asset_id": item["id"],
+                                "score": 0.95,
+                                "rationale": "canonical sequence candidate",
+                            }
+                        )
+                        continue
+                    score, rationale = _sequence_candidate_score(ranked[0], item)
+                    if score <= 0:
+                        continue
+                    group_items.append(
+                        {
+                            "asset_id": item["id"],
+                            "score": score,
+                            "rationale": rationale,
+                        }
+                    )
+                if len(group_items) < 2:
+                    continue
+                groups.append(
+                    {
+                        "canonical_asset_id": canonical_asset_id,
+                        "items": group_items,
+                    }
+                )
+
+        return replace_duplicate_groups(db_path, group_type="SNAPCHAT_SEQUENCE", groups=groups)
     finally:
         con.close()
 

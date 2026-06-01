@@ -28,6 +28,7 @@ from . import intelligence
 from .derivatives import _build_image_thumbnail
 from .metadata import manifest
 from .pipeline import run_face_detection, run_full_pipeline
+from .utils.location import reverse_geocode_address
 from .tooling import build_tool_stack_report
 
 
@@ -143,6 +144,9 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         overscroll-behavior: contain;
       }}
       .home-page .main {{
+        display: grid;
+        grid-template-rows: min-content min-content min-content minmax(0, 1fr);
+        gap: 12px;
         overflow: hidden;
       }}
       .toolbar {{
@@ -228,7 +232,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       .home-page .hero-card {{
         grid-template-columns: minmax(0, 1fr);
         gap: 14px;
-        margin-bottom: 14px;
+        margin-bottom: 0;
       }}
       .hero-panel {{
         background: linear-gradient(180deg, rgba(255,255,255,.68), rgba(255,255,255,.38));
@@ -300,6 +304,14 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         color: #0b61bb;
         border: 1px solid rgba(10,132,255,.18);
       }}
+      .sync-banner {{
+        margin-bottom: 16px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: #fff4d8;
+        color: #8a4b00;
+        border: 1px solid rgba(196, 118, 0, .18);
+      }}
       .metrics {{
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -309,13 +321,13 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       .home-page .metrics {{
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 10px;
-        margin-bottom: 12px;
+        margin-bottom: 0;
       }}
       .home-panels {{
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
-        height: clamp(230px, 29vh, 330px);
+        min-height: 0;
       }}
       .home-panel {{
         min-height: 0;
@@ -336,7 +348,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       .home-page .hero-card {{
         grid-template-columns: minmax(0, 1.12fr) minmax(260px, .88fr);
         gap: 10px;
-        margin-bottom: 8px;
+        margin-bottom: 0;
       }}
       .home-page .hero-copy {{
         min-height: 92px;
@@ -449,7 +461,9 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       }}
       .home-page .home-panels {{
         gap: 10px;
-        height: clamp(160px, 20vh, 200px);
+        height: 100%;
+        min-height: 0;
+        align-self: stretch;
       }}
       .home-page .home-panel {{
         padding: 0;
@@ -462,7 +476,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       }}
       .home-page .metrics {{
         gap: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 0;
       }}
       .home-page .button-row {{
         gap: 8px;
@@ -537,10 +551,366 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         gap: 14px;
       }}
-      .review-card {{
+      .review-page .toolbar {{
+        display: none;
+      }}
+      .review-page .main {{
+        padding-top: 12px;
+      }}
+      .review-shell {{
         display: grid;
         gap: 12px;
-        padding: 16px;
+      }}
+      .review-actions {{
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 2px;
+      }}
+      .review-actions .btn {{
+        padding: 14px 18px;
+        font-size: 1rem;
+      }}
+      .review-group {{
+        display: grid;
+        gap: 10px;
+      }}
+      .review-group.featured {{
+        gap: 12px;
+      }}
+      .review-sections {{
+        display: grid;
+        gap: 26px;
+      }}
+      .review-section {{
+        display: grid;
+        gap: 12px;
+      }}
+      .review-section-head {{
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 12px;
+      }}
+      .review-section-head-actions {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }}
+      .review-section-head h2 {{
+        margin: 0;
+        font-size: 1.45rem;
+        letter-spacing: -.03em;
+      }}
+      .review-section-head p {{
+        margin: 4px 0 0;
+        color: var(--muted);
+      }}
+      .review-group-head {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 2px;
+      }}
+      .review-group-head h3 {{
+        margin: 0;
+        font-size: 1.02rem;
+        letter-spacing: -.02em;
+      }}
+      .review-group-head .review-group-subtitle {{
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: .86rem;
+      }}
+      .review-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 14px;
+      }}
+      .review-group.featured .review-grid {{
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      }}
+      .review-card-tile {{
+        display: grid;
+        gap: 10px;
+        min-width: 0;
+      }}
+      .review-card-media {{
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        background: rgba(255,255,255,.18);
+        box-shadow: 0 8px 18px rgba(15,23,42,.08);
+        transition: transform .15s ease, box-shadow .15s ease;
+      }}
+      .review-card-media:hover {{
+        transform: translateY(-1px);
+        box-shadow: 0 12px 26px rgba(15,23,42,.12);
+      }}
+      .review-card-media.primary {{
+        box-shadow: 0 0 0 2px rgba(10,132,255,.78), 0 8px 18px rgba(15,23,42,.08);
+      }}
+      .review-card-media img,
+      .review-card-media video {{
+        width: 100%;
+        height: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        display: block;
+        background: rgba(15,23,42,.04);
+      }}
+      .review-card-media video {{
+        background: #000;
+        cursor: pointer;
+      }}
+      .review-card-actions {{
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        right: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        pointer-events: none;
+      }}
+      .review-card-action {{
+        pointer-events: auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.34);
+        background: rgba(15,23,42,.58);
+        color: #fff;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 10px 22px rgba(15,23,42,.18);
+        font-size: .95rem;
+      }}
+      .review-card-action.keep {{
+        background: rgba(10,132,255,.66);
+      }}
+      .review-card-action.delete {{
+        background: rgba(220,38,38,.68);
+      }}
+      .review-card-badge {{
+        position: absolute;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.82);
+        color: #0f172a;
+        border: 1px solid rgba(255,255,255,.72);
+        font-size: .78rem;
+        font-weight: 700;
+        box-shadow: 0 8px 18px rgba(15,23,42,.08);
+      }}
+      .review-card-header {{
+        display: grid;
+        gap: 8px;
+        padding: 0 4px 4px;
+      }}
+      .review-card-title {{
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .review-card-filename {{
+        font-size: .95rem;
+        font-weight: 700;
+        line-height: 1.3;
+        letter-spacing: -.02em;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .review-card-meta {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+        font-size: .84rem;
+      }}
+      .review-card-meta span {{
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.50);
+        border: 1px solid rgba(255,255,255,.62);
+      }}
+      .review-card-header .review-card-meta span {{
+        background: rgba(15,23,42,.05);
+        border-color: rgba(15,23,42,.08);
+      }}
+      .review-hero {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr);
+        gap: 16px;
+        margin-bottom: 18px;
+      }}
+      .review-hero-panel {{
+        display: grid;
+        gap: 14px;
+        padding: 22px;
+      }}
+      .review-hero-copy {{
+        display: grid;
+        gap: 10px;
+      }}
+      .review-hero-copy h1 {{
+        margin: 0;
+        font-size: clamp(2.1rem, 3.6vw, 3.3rem);
+        letter-spacing: -.05em;
+        line-height: .96;
+      }}
+      .review-hero-copy p {{
+        margin: 0;
+        max-width: 58ch;
+        color: var(--muted);
+        font-size: 1rem;
+        line-height: 1.5;
+      }}
+      .review-automation {{
+        display: grid;
+        gap: 10px;
+      }}
+      .review-automation h2 {{
+        margin: 0;
+        font-size: 1.02rem;
+      }}
+      .review-automation-list {{
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }}
+      .review-automation-list li {{
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        color: #243041;
+        line-height: 1.4;
+      }}
+      .review-automation-list li::before {{
+        content: "•";
+        color: #0b61bb;
+        font-weight: 800;
+      }}
+      .review-hero-actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }}
+      .review-rail {{
+        display: grid;
+        gap: 12px;
+      }}
+      .review-rail .system-card {{
+        padding: 18px;
+      }}
+      .review-rail h3 {{
+        margin: 0 0 8px;
+        font-size: .94rem;
+        color: var(--muted);
+        font-weight: 650;
+      }}
+      .review-mini-stat {{
+        display: grid;
+        gap: 4px;
+      }}
+      .review-mini-stat strong {{
+        font-size: 1.55rem;
+        letter-spacing: -.04em;
+      }}
+      .review-mini-stat span {{
+        color: var(--muted);
+        font-size: .88rem;
+      }}
+      .review-progress {{
+        display: grid;
+        gap: 8px;
+      }}
+      .review-progress-row {{
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: .86rem;
+      }}
+      .review-progress-row strong {{
+        color: #0f172a;
+      }}
+      .review-progress-fill {{
+        background: linear-gradient(90deg, #0a84ff, #7ab7ff);
+      }}
+      .review-card {{
+        display: grid;
+        gap: 14px;
+        padding: 18px;
+      }}
+      .review-card-head {{
+        display: grid;
+        gap: 8px;
+      }}
+      .review-card-topline {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }}
+      .review-card-topline .badge {{
+        background: rgba(255,255,255,.76);
+      }}
+      .review-card h3 {{
+        margin: 0;
+        font-size: 1.08rem;
+        letter-spacing: -.02em;
+      }}
+      .review-card-summary {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+        font-size: .88rem;
+      }}
+      .review-card-summary span {{
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.52);
+        border: 1px solid rgba(255,255,255,.6);
+      }}
+      .review-card-note {{
+        color: var(--muted);
+        font-size: .88rem;
+        line-height: 1.45;
+      }}
+      .review-card-actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }}
+      .review-card-actions .btn {{
+        justify-content: center;
+      }}
+      .review-card-actions .btn.secondary {{
+        box-shadow: none;
+      }}
+      .review-card-actions .btn.primary {{
+        background: linear-gradient(180deg, #0a84ff, #0a67d1);
+      }}
+      .review-card-actions .btn.ghost {{
+        background: rgba(255,255,255,.58);
+      }}
+      .review-lanes {{
+        display: grid;
+        gap: 16px;
       }}
       .review-strip {{
         display: grid;
@@ -561,18 +931,6 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       .duplicate-card {{
         display: grid;
         gap: 10px;
-      }}
-      .duplicate-card-title {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }}
-      .duplicate-card-title a {{
-        color: inherit;
-      }}
-      .duplicate-card-title a:hover {{
-        text-decoration: underline;
       }}
       .duplicate-tile {{
         position: relative;
@@ -674,6 +1032,13 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         font-weight: 700;
         letter-spacing: -.03em;
       }}
+      .review-empty {{
+        padding: 18px;
+        border-radius: 20px;
+        border: 1px dashed rgba(15,23,42,.14);
+        background: rgba(255,255,255,.42);
+        color: var(--muted);
+      }}
       .system-top {{
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -754,6 +1119,96 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         gap: 10px;
         padding: 14px;
       }}
+      .people-strap {{
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: .92rem;
+        margin-bottom: 14px;
+      }}
+      .people-strap span {{
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.72);
+        border: 1px solid rgba(255,255,255,.6);
+      }}
+      .people-empty {{
+        color: var(--muted);
+        padding: 16px 4px;
+      }}
+      .people-person-tile {{
+        display: block;
+        position: relative;
+        min-width: 0;
+        text-decoration: none;
+      }}
+      .people-person-tile .album-cover-shell {{
+        position: relative;
+      }}
+      .people-person-tile img,
+      .people-photo-image {{
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        border-radius: 26px;
+        background: linear-gradient(135deg, #eceef3, #d8dde7);
+        border: 1px solid rgba(255,255,255,.65);
+        display: block;
+      }}
+      .people-person-meta {{
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 8px;
+      }}
+      .people-photo-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 14px;
+      }}
+      .people-photo-tile {{
+        display: block;
+      }}
+      .people-detail {{
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        padding: 0;
+      }}
+      .people-detail .section-header h2 {{
+        margin-bottom: 0;
+      }}
+      .people-detail-main {{
+        background: rgba(255,255,255,.52);
+        border: 1px solid rgba(255,255,255,.55);
+        border-radius: 28px;
+        padding: 20px;
+        box-shadow: var(--shadow-soft);
+      }}
+      .people-detail-rail .card.section,
+      .people-detail-rail .card.person-name-form {{
+        background: rgba(255,255,255,.58);
+        border: 1px solid rgba(255,255,255,.55);
+        border-radius: 24px;
+        box-shadow: var(--shadow-soft);
+      }}
+      .album-cover-placeholder {{
+        aspect-ratio: 1 / 1;
+        display: grid;
+        place-items: center;
+        border-radius: 26px;
+        background: linear-gradient(135deg, #eceef3, #d8dde7);
+        border: 1px solid rgba(255,255,255,.65);
+        font-size: 3rem;
+        font-weight: 700;
+        color: rgba(17,24,39,.72);
+      }}
+      .album-cover-shell {{
+        position: relative;
+      }}
+      .album-cover-link {{
+        display: block;
+      }}
       .album-cover {{
         width: 100%;
         aspect-ratio: 1 / 1;
@@ -762,9 +1217,191 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         background: linear-gradient(135deg, #eceef3, #d8dde7);
         border: 1px solid rgba(255,255,255,.65);
       }}
+      .album-cover-badge {{
+        position: absolute;
+        left: 10px;
+        top: 10px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(17,24,39,.72);
+        color: #fff;
+        font-size: .76rem;
+        font-weight: 700;
+        letter-spacing: .01em;
+        box-shadow: 0 10px 20px rgba(15,23,42,.15);
+      }}
+      .album-head {{
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .album-name-form {{
+        display: grid;
+        gap: 8px;
+      }}
+      .album-name-form input[type="text"] {{
+        min-width: 0;
+      }}
       .asset-card {{
         display: grid;
         gap: 8px;
+        position: relative;
+        touch-action: none;
+      }}
+      .asset-select-toggle {{
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.75);
+        background: rgba(17,24,39,.78);
+        color: #fff;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        z-index: 3;
+        cursor: pointer;
+        box-shadow: 0 10px 22px rgba(15,23,42,.18);
+      }}
+      .library-select-mode .asset-select-toggle {{
+        display: flex;
+      }}
+      .asset-card.is-selected .asset-select-toggle {{
+        display: flex;
+        background: rgba(10,132,255,.92);
+      }}
+      .asset-card.is-selected .asset-frame::after {{
+        box-shadow: inset 0 0 0 3px rgba(10,132,255,.78);
+      }}
+      .library-select-bar {{
+        display: none;
+      }}
+      .library-select-bar.active {{
+        display: grid;
+        gap: 12px;
+        position: fixed;
+        left: 264px;
+        right: 28px;
+        bottom: 20px;
+        z-index: 18;
+        margin: 0;
+        padding: 14px 16px;
+        border-radius: 24px;
+        border: 1px solid rgba(255,255,255,.62);
+        background: rgba(255,255,255,.62);
+        backdrop-filter: blur(24px) saturate(150%);
+        box-shadow: 0 20px 44px rgba(15,23,42,.15);
+      }}
+      .library-select-fab {{
+        position: fixed;
+        top: 18px;
+        right: 28px;
+        z-index: 19;
+        border: 1px solid rgba(255,255,255,.62);
+        background: rgba(255,255,255,.64);
+        backdrop-filter: blur(24px) saturate(150%);
+        box-shadow: 0 16px 34px rgba(15,23,42,.12);
+      }}
+      .library-select-bar-head {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }}
+      .library-select-bar-count {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 88px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(15,23,42,.06);
+        border: 1px solid rgba(15,23,42,.08);
+        color: #0f172a;
+        font-size: .84rem;
+        font-weight: 600;
+        backdrop-filter: blur(10px);
+      }}
+      .library-name-suggestions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        max-height: 96px;
+        overflow: auto;
+        padding-right: 4px;
+      }}
+      .library-name-chip {{
+        border: 1px solid rgba(10,132,255,.18);
+        background: rgba(10,132,255,.08);
+        color: #0b61bb;
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: .84rem;
+        font-weight: 600;
+        cursor: pointer;
+      }}
+      .library-name-chip:hover {{
+        background: rgba(10,132,255,.14);
+      }}
+      .library-select-bar input[type="text"] {{
+        min-width: 220px;
+        flex: 1;
+      }}
+      .library-load-more {{
+        display: grid;
+        place-items: center;
+        margin: 24px 0 120px;
+        color: var(--muted);
+        font-size: .9rem;
+      }}
+      .library-load-more .spinner {{
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 2px solid rgba(10,132,255,.18);
+        border-top-color: rgba(10,132,255,.9);
+        animation: spin .9s linear infinite;
+        margin-bottom: 8px;
+      }}
+      .library-infinite-root {{
+        display: grid;
+        gap: 18px;
+        padding-bottom: 128px;
+      }}
+      @keyframes spin {{
+        to {{ transform: rotate(360deg); }}
+      }}
+      .people-detail {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(320px, .85fr);
+        gap: 20px;
+        align-items: start;
+      }}
+      .people-detail-main, .people-detail-rail {{
+        min-width: 0;
+      }}
+      .people-detail-rail {{
+        display: grid;
+        gap: 16px;
+      }}
+      .person-name-form {{
+        display: grid;
+        gap: 10px;
+      }}
+      .person-name-form.compact {{
+        gap: 8px;
+      }}
+      .inline-form-note {{
+        color: var(--muted);
+        font-size: .84rem;
+      }}
+      .person-candidate-card {{
+        display: grid;
+        gap: 10px;
       }}
       .asset-link {{
         display: block;
@@ -830,6 +1467,118 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       textarea {{
         min-height: 120px;
         resize: vertical;
+      }}
+      .detail-form {{
+        display: grid;
+        gap: 12px;
+      }}
+      .detail-form label {{
+        display: grid;
+        gap: 6px;
+      }}
+      .detail-form textarea {{
+        min-height: 90px;
+      }}
+      .asset-detail-page .main {{
+        display: grid;
+        grid-template-rows: min-content minmax(0, 1fr);
+        gap: 18px;
+        overflow: hidden;
+      }}
+      .asset-detail-workspace {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.55fr) minmax(360px, .92fr);
+        gap: 18px;
+        min-height: 0;
+      }}
+      .asset-viewer-panel,
+      .asset-detail-panel {{
+        min-width: 0;
+        min-height: 0;
+      }}
+      .asset-detail-page .viewer-card {{
+        height: 100%;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+      }}
+      .asset-detail-page .viewer-stage {{
+        min-height: 0;
+        height: 100%;
+      }}
+      .asset-detail-page .viewer-preview-link {{
+        display: block;
+        width: 100%;
+        height: 100%;
+      }}
+      .asset-detail-page .viewer-stage img,
+      .asset-detail-page .viewer-stage video {{
+        height: 100%;
+        max-height: none;
+      }}
+      .asset-detail-shell {{
+        height: 100%;
+        display: grid;
+        grid-template-rows: min-content min-content min-content min-content;
+        gap: 16px;
+        align-content: start;
+      }}
+      .asset-header-card {{
+        display: grid;
+        gap: 6px;
+      }}
+      .asset-header-card h2 {{
+        margin: 0;
+        font-size: 1.2rem;
+      }}
+      .asset-header-card p {{
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }}
+      .asset-meta-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }}
+      .asset-field {{
+        display: grid;
+        gap: 6px;
+      }}
+      .asset-field.full {{
+        grid-column: 1 / -1;
+      }}
+      .asset-field-label {{
+        color: var(--muted);
+        font-size: .8rem;
+        font-weight: 700;
+        letter-spacing: .05em;
+        text-transform: uppercase;
+      }}
+      .asset-field input[readonly] {{
+        color: #475467;
+        background: rgba(242,244,247,.96);
+      }}
+      .asset-inline-form {{
+        display: grid;
+        gap: 8px;
+      }}
+      .asset-tag-strip {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }}
+      .asset-tag-strip .status-pill {{
+        color: #17324f;
+      }}
+      .asset-tag-strip .status-pill.empty {{
+        color: var(--muted);
+      }}
+      .asset-actions-card {{
+        display: grid;
+        gap: 12px;
+      }}
+      .asset-actions-card .section-header {{
+        margin-bottom: 0;
       }}
       .form-grid {{
         display: grid;
@@ -1065,11 +1814,30 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
           height: auto;
           overflow: visible;
         }}
+        .asset-detail-page .main {{
+          height: auto;
+          overflow: visible;
+        }}
+        .asset-detail-workspace {{
+          grid-template-columns: 1fr;
+        }}
+        .asset-meta-grid {{
+          grid-template-columns: 1fr;
+        }}
         .hero-card {{
           grid-template-columns: 1fr;
         }}
         .hero-strip {{
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+        .library-select-bar.active {{
+          left: 12px;
+          right: 12px;
+          bottom: 12px;
+        }}
+        .library-select-fab {{
+          top: 12px;
+          right: 12px;
         }}
       }}
     </style>
@@ -1155,6 +1923,9 @@ def _friendly_history_label(action_type: str) -> str:
         "HIDE_DUPLICATE_ITEM": "Remove duplicate item",
     }
     return labels.get(action_type, action_type.replace("_", " ").title())
+
+
+PERSON_DETAIL_ASSET_LIMIT = 5000
 
 
 def _mercator_point(lat: float, lon: float) -> tuple[float, float]:
@@ -1273,23 +2044,29 @@ def _render_home_map_panel(db_path: Path) -> str:
 
 
 def _render_home_people_panel(db_path: Path) -> str:
-    people = manifest.list_face_identities(db_path, limit=4)
+    people = manifest.list_person_albums(db_path, limit=4)
     tiles = []
     for row in people:
-        cover = row.get("cover_asset_id") or row.get("cover_face_id")
-        if not cover:
+        cover_asset = row.get("cover_asset_id")
+        cover_face = row.get("cover_face_id")
+        cover_src = ""
+        if cover_asset:
+            cover_src = f"/poster/{escape(str(cover_asset))}"
+        elif cover_face:
+            cover_src = f"/face-crop/{escape(str(cover_face))}"
+        if not cover_src:
             continue
         label = row.get("label") or "Person"
         tiles.append(
             f"""
-            <a class="featured-person" href="/app/people?person={escape(label)}" title="{escape(label)}">
-              <img src="/poster/{escape(cover)}" alt="{escape(label)}" loading="lazy" decoding="async">
+            <a class="featured-person" href="/app/people?identity_id={escape(str(row['id']))}" title="{escape(label)}">
+              <img src="{cover_src}" alt="{escape(label)}" loading="lazy" decoding="async">
             </a>
             """
         )
     if len(tiles) < 4:
         recent_assets = manifest.list_assets(db_path, limit=4)
-        used_ids = {row.get("cover_asset_id") or row.get("cover_face_id") for row in people}
+        used_ids = {row.get("cover_asset_id") for row in people if row.get("cover_asset_id")}
         for row in recent_assets:
             asset_id = row.get("id")
             if not asset_id or asset_id in used_ids:
@@ -1354,20 +2131,67 @@ def _format_moment_label(value: Optional[str]) -> str:
         return "Unknown Date"
 
 
+def _human_file_size(value: Optional[object]) -> str:
+    try:
+        size = float(value or 0)
+    except Exception:
+        return "-"
+    if size <= 0:
+        return "-"
+    units = ["bytes", "KB", "MB", "GB", "TB"]
+    index = 0
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024.0
+        index += 1
+    if index == 0:
+        return f"{int(size)} {units[index]}"
+    return f"{size:.1f} {units[index]}"
+
+
+def _location_address_from_metadata(metadata_rows: list[dict]) -> str:
+    for row in metadata_rows:
+        if row.get("field_name") != "location":
+            continue
+        value = row.get("value")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _resolve_asset_address(db_path, asset_id: str, item: dict, metadata_rows: list[dict]) -> str:
+    address = _location_address_from_metadata(metadata_rows)
+    if address:
+        return address
+    lat = item.get("gps_lat")
+    lon = item.get("gps_lon")
+    if lat is None or lon is None:
+        return ""
+    resolved = reverse_geocode_address(float(lat), float(lon))
+    if resolved:
+        manifest.set_metadata_field(
+            db_path,
+            asset_id,
+            field_name="location",
+            value=resolved,
+            source_name="reverse_geocoder",
+            source_field="Address",
+            is_canonical=True,
+        )
+        return resolved
+    return ""
+
+
 def _asset_thumb_html(asset_id: str, filename: str, managed_path: Optional[str], dt_original: Optional[str], media_type: str, status: str) -> str:
     thumb_src = f"/poster/{asset_id}"
-    managed_link = f'<a href="/managed/{asset_id}">open</a>' if managed_path else '<span class="muted">pending</span>'
     return f"""
-    <article class="asset-card">
-      <a class="asset-link" href="/app/assets/{asset_id}">
+    <article class="asset-card" data-asset-id="{escape(asset_id)}">
+      <button class="asset-select-toggle" type="button" aria-label="Select {escape(filename)}">+</button>
+      <a class="asset-link" href="/app/assets/{asset_id}" aria-label="{escape(filename)}">
         <div class="asset-frame">
           <img class="asset-thumb" src="{thumb_src}" alt="{escape(filename)}" loading="lazy" decoding="async">
           <span class="media-badge">{escape(media_type)}</span>
         </div>
       </a>
-      <div class="asset-name"><a href="/app/assets/{asset_id}">{escape(filename)}</a></div>
-      <div class="asset-meta">{escape(media_type)} · {escape(status)}</div>
-      <div class="asset-meta">{escape(dt_original or "unknown time")} · {managed_link}</div>
     </article>
     """
 
@@ -1403,29 +2227,55 @@ def _search_result_card(row: dict, *, query: Optional[str] = None, similar_to: O
 def _duplicate_tile_html(group_id: str, item: dict, *, badge: str = "") -> str:
     asset_id = item["asset_id"]
     filename = item.get("orig_filename") or asset_id
-    detail = " · ".join(part for part in [str(item.get("media_type") or "unknown"), str(item.get("dt_original") or "unknown time")] if part)
+    media_kind = _guess_media_kind(item.get("managed_path"), item.get("media_type"))
+    inline_url = f"/inline/{escape(asset_id)}"
+    poster_url = f"/poster/{escape(asset_id)}"
+    detail_bits = [
+        str(item.get("dt_original") or "unknown time"),
+        _human_file_size(item.get("orig_size")) or "Unknown size",
+        str(item.get("media_type") or "unknown"),
+    ]
+    detail = " · ".join(part for part in detail_bits if part)
     keep_link = f"/app/duplicates/{escape(group_id)}/keep?asset_id={escape(asset_id)}"
     hide_link = f"/app/duplicates/{escape(group_id)}/hide?asset_id={escape(asset_id)}"
     compare_link = f"/app/duplicates/{escape(group_id)}/review"
-    badge_html = f'<span class="badge">{escape(badge)}</span>' if badge else ""
+    media_html = (
+        f"""
+        <video controls preload="metadata" poster="{poster_url}">
+          <source src="{inline_url}">
+        </video>
+        """
+        if media_kind == "video"
+        else f'<img src="{poster_url}" alt="{escape(filename)}" loading="lazy" decoding="async">'
+    )
+    badge_html = escape(badge) if badge else ""
     return f"""
-    <article class="duplicate-tile card">
-      <div class="asset-frame">
-        <a class="asset-link" href="{compare_link}">
-          <img class="asset-thumb" src="/poster/{escape(asset_id)}" alt="{escape(filename)}" loading="lazy" decoding="async">
-        </a>
-        <div class="duplicate-tile-actions">
-          <a class="duplicate-action keep" href="{keep_link}" title="Keep this one" aria-label="Keep this one">✓</a>
-          <a class="duplicate-action delete" href="{hide_link}" title="Remove this one" aria-label="Remove this one">🗑</a>
+    <article class="duplicate-tile review-card-tile card">
+      <div class="review-card-media primary">
+        {media_html}
+        <div class="review-card-actions">
+          <a class="review-card-action keep" href="{keep_link}" title="Keep this one" aria-label="Keep this one">✓</a>
+          <a class="review-card-action delete" href="{hide_link}" title="Remove this one" aria-label="Remove this one">🗑</a>
+        </div>
+        {f'<div class="review-card-badge">{badge_html}</div>' if badge_html else ''}
+      </div>
+      <div class="review-card-footer">
+        <div class="review-card-title">
+          <a class="review-title-link" href="{compare_link}"><strong>{escape(filename)}</strong></a>
+        </div>
+        <div class="review-card-meta">
+          <span>{escape(detail)}</span>
         </div>
       </div>
-      <div class="duplicate-item-footer">
-        <a class="review-title-link" href="{compare_link}"><strong>{escape(filename)}</strong></a>
-        {badge_html}
-      </div>
-      <div class="asset-meta">{escape(detail)}</div>
     </article>
     """
+
+
+def _review_sequence_score_label(group: dict) -> str:
+    group_type = str(group.get("group_type") or "")
+    if group_type == "EXACT_SHA256":
+        return "100% duplicate"
+    return f"{int(round(float(group.get('match_score_pct') or 0)))}% near duplicate"
 
 
 def _friendly_job_label(job_type: str) -> str:
@@ -1504,6 +2354,7 @@ def _viewer_html(asset_id: str, item: dict) -> str:
     media_kind = _guess_media_kind(managed_path, item.get("media_type"))
     inline_url = f"/inline/{asset_id}"
     thumb_url = f"/thumbnail/{asset_id}"
+    poster_url = f"/poster/{asset_id}"
     actions = f"""
     <div class="button-row" style="padding: 18px;">
       <a href="/managed/{asset_id}"><button class="btn" type="button">Open File</button></a>
@@ -1523,7 +2374,9 @@ def _viewer_html(asset_id: str, item: dict) -> str:
         return f"""
         <section class="card viewer-card">
           <div class="viewer-stage">
-            <img src="{inline_url}" alt="{escape(filename)}" loading="lazy" decoding="async">
+            <a class="viewer-preview-link" href="{inline_url}" title="Open full resolution">
+              <img src="{poster_url}" alt="{escape(filename)}" loading="eager" decoding="async" fetchpriority="high">
+            </a>
           </div>
           {actions}
         </section>
@@ -1532,7 +2385,7 @@ def _viewer_html(asset_id: str, item: dict) -> str:
         return f"""
         <section class="card viewer-card">
           <div class="viewer-stage">
-            <video controls preload="metadata" poster="{thumb_url}">
+            <video controls autoplay muted playsinline preload="metadata" poster="{thumb_url}">
               <source src="{inline_url}">
             </video>
           </div>
@@ -1543,7 +2396,7 @@ def _viewer_html(asset_id: str, item: dict) -> str:
         return f"""
         <section class="card viewer-card">
           <div class="viewer-stage">
-            <audio controls preload="metadata">
+            <audio controls preload="none">
               <source src="{inline_url}">
             </audio>
           </div>
@@ -1583,9 +2436,6 @@ def _rating_controls_html(asset_id: str, item: dict) -> str:
         buttons.append(
             f'<a href="/app/assets/{asset_id}/review?rating={value}"><button class="{active}" type="button">{value}★</button></a>'
         )
-    buttons.append(
-        f'<a href="/app/assets/{asset_id}/review?state=reviewed"><button class="btn secondary" type="button">Mark Reviewed</button></a>'
-    )
     return "".join(buttons)
 
 
@@ -1639,12 +2489,12 @@ def _resolve_poster_path(
         managed_file = managed_library_dir / str(managed_rel)
         if managed_file.exists():
             try:
-                width, height = _build_image_thumbnail(managed_file, candidate, 640)
+                width, height = _build_image_thumbnail(managed_file, candidate, 320)
                 manifest.record_thumbnail(db_path, asset_id, "primary", str(candidate), "READY", width=width, height=height)
                 return candidate, item
             except Exception:
-                return managed_file, item
-    return None, item
+                return None, item
+        return None, item
 
 
 def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
@@ -1664,7 +2514,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         current_config.ensure_workspace_dirs(resolved)
         current_db_path = current_config.db_path(resolved)
         current_managed = current_config.managed_library_dir(resolved)
-        manifest.init_db(current_db_path)
+        try:
+            manifest.init_db(current_db_path)
+        except Exception as exc:
+            if "readonly database" not in str(exc).lower():
+                raise
         return current_config, resolved, current_db_path, current_managed
 
     def _render_dashboard(current_config: AppConfig, db_path: Path, resolved: Path, message: Optional[str] = None) -> str:
@@ -1672,7 +2526,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         metadata_overview = manifest.get_metadata_overview(db_path)
         import_progress = manifest.get_import_progress(db_path)
         face_overview = manifest.get_face_overview(db_path)
-        recent_assets = manifest.list_assets(db_path, limit=20)
+        recent_assets = []
+        for row in manifest.list_assets(db_path, limit=120, sort="recent"):
+            if row.get("managed_path"):
+                recent_assets.append(row)
+            if len(recent_assets) >= 20:
+                break
+        if not recent_assets:
+            recent_assets = manifest.list_assets(db_path, limit=20, sort="recent")
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         body = f"""
         <section class="hero-card">
@@ -1705,8 +2566,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </section>
           <section class="summary-card">
             <h2>People</h2>
-            <div class="summary-big">{face_overview.get('identities', 0)}</div>
-            <div class="summary-copy">named albums and identities</div>
+            <div class="summary-big">{face_overview.get('confirmed_identities', 0)}</div>
+            <div class="summary-copy">named people</div>
           </section>
           <section class="summary-card">
             <h2>Metadata</h2>
@@ -1721,163 +2582,482 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         """
         return _page("Photos", body, history_html=_history_sidebar_html(db_path), body_class="home-page")
 
-    def _render_people_page(db_path: Path, message: Optional[str] = None, person: Optional[str] = None) -> str:
+    def _render_people_page(
+        db_path: Path,
+        message: Optional[str] = None,
+        person: Optional[str] = None,
+        identity_id: Optional[str] = None,
+        show_review: bool = False,
+        view: str = "confirmed",
+    ) -> str:
+        active_jobs = [
+            job for job in manifest.list_jobs(db_path, limit=20)
+            if str(job.get("status") or "") in {"QUEUED", "RUNNING"}
+            and str(job.get("job_type") or "") in {"face_detection", "face_clustering", "full_pipeline"}
+        ]
+        sync_banner = ""
+        if active_jobs:
+            labels = ", ".join(str(job.get("job_type") or "sync").replace("_", " ") for job in active_jobs[:2])
+            if len(active_jobs) > 2:
+                labels += f" and {len(active_jobs) - 2} more"
+            sync_banner = f"<div class='sync-banner'>Syncing in progress: {escape(labels)}. People clusters may change while this finishes.</div>"
         query = (person or "").strip() or None
+        selected_identity = manifest.get_face_identity(db_path, identity_id) if identity_id else None
         overview = manifest.get_face_overview(db_path)
-        albums = manifest.list_person_albums(db_path, limit=80, query=query)
-        clarifications = manifest.list_face_clarifications(db_path, limit=24)
-        selected_assets = manifest.list_assets_for_person(db_path, query, limit=60) if query else []
-        album_cards = "".join(
-            f"""
-            <a class="card album-card" href="/app/people?person={escape(row['label'])}">
-              <img class="album-cover" src="/poster/{escape(row.get('cover_asset_id') or row.get('cover_face_id') or row['id'])}" alt="{escape(row['label'])}" loading="lazy" decoding="async">
-              <div class="asset-name">{escape(row['label'])}</div>
-              <div class="asset-meta">{row.get('asset_count', 0)} photos · {row.get('face_count', 0)} faces</div>
+        confirmed_albums = manifest.list_person_albums(db_path, limit=24, query=query, status="CONFIRMED")
+        clustered_albums = manifest.list_person_albums(db_path, limit=48, query=query, status="CLUSTERED")
+        people_by_id: OrderedDict[str, dict[str, object]] = OrderedDict()
+        for row in confirmed_albums + clustered_albums:
+            people_by_id[str(row["id"])] = row
+        named_albums = list(people_by_id.values())
+        active_view = "confirmed"
+        people_return_to = (
+            f"/app/people?identity_id={quote_plus(str(identity_id))}"
+            if identity_id
+            else "/app/people"
+        )
+
+        def _person_tile(row: dict[str, object]) -> str:
+            cover_src = ""
+            if row.get("cover_asset_id"):
+                cover_src = f"/poster/{escape(str(row['cover_asset_id']))}"
+            elif row.get("cover_face_id"):
+                cover_src = f"/face-crop/{escape(str(row['cover_face_id']))}"
+            else:
+                tagged_assets = manifest.list_assets_tagged_with_person(db_path, str(row.get("label") or ""), limit=1)
+                if tagged_assets:
+                    cover_src = f"/poster/{escape(str(tagged_assets[0]['id']))}"
+            label = str(row.get("label") or "Person")
+            status = str(row.get("status") or "")
+            initials = escape((label[:1] or "?").upper())
+            href = f"/app/people?identity_id={escape(str(row['id']))}"
+            cover_html = f'<img src="{cover_src}" alt="{escape(label)}" loading="lazy" decoding="async">' if cover_src else f'<div class="album-cover-placeholder">{initials}</div>'
+            status_badge = (
+                '<span class="album-cover-chip">Cluster</span>'
+                if status == "CLUSTERED"
+                else ""
+            )
+            return f"""
+            <a class="people-person-tile" href="{href}">
+              <div class="album-cover-shell">
+                {cover_html}
+                <span class="album-cover-badge">{escape(label)}</span>
+                {status_badge}
+              </div>
             </a>
             """
-            for row in albums
-        ) or "<section class='card muted'>No named people yet.</section>"
-        album_grid = "".join(
-            _asset_thumb_html(
-                asset_id=row["id"],
-                filename=row.get("orig_filename") or row["id"],
-                managed_path=row.get("managed_path"),
-                dt_original=row.get("dt_original"),
-                media_type=row.get("media_type") or "unknown",
-                status=row.get("review_state") or row.get("status") or "new",
-            )
-            for row in selected_assets
-        ) or "<section class='card muted'>Pick a person to open their album.</section>"
-        clarification_cards = "".join(
-            f"""
-            <section class="card">
-              <div class="button-row" style="justify-content:space-between; align-items:center;">
-                <strong>{escape(item.get('orig_filename') or item['asset_id'])}</strong>
-                <span class="badge">{escape(str(round(float(item.get('score') or 0) * 100, 1)))}%</span>
-              </div>
-              <div style="margin-top:10px;">
-                <img class="album-cover" src="/face-crop/{escape(item['face_id'])}" alt="{escape(item.get('orig_filename') or 'face review')}" loading="lazy" decoding="async">
-              </div>
-              <div class="asset-meta" style="margin-top:10px;">Suggest: {escape(item.get('suggested_label') or item.get('suggested_identity_label') or 'unknown')}</div>
-              <div class="button-row" style="margin-top:10px;">
-                <a href="/app/people"><button class="btn secondary" type="button">Open People</button></a>
-                <a href="/app/faces/reject?face_id={escape(item['face_id'])}"><button class="btn secondary" type="button">Hide</button></a>
-              </div>
-            </section>
-            """
-            for item in clarifications
-        ) or "<section class='card muted'>No face clarifications.</section>"
+
+        named_cards = "".join(card for card in (_person_tile(row) for row in named_albums) if card) or "<div class='people-empty'>No named people yet.</div>"
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
-        body = f"""
+        body_parts = [
+            f"""
         <div class="toolbar">
           <div class="title">
             <h1>People</h1>
-            <p>Browse people like albums. Name one face and the album grows with you.</p>
+            <p>Open a person to browse confirmed photos and merge strong related clusters.</p>
           </div>
         </div>
-        {flash}
-        <section class="metrics">
-          <section class="summary-card"><h2>People</h2><div class="summary-big">{overview.get('identities', 0)}</div><div class="summary-copy">named albums</div></section>
-          <section class="summary-card"><h2>Faces</h2><div class="summary-big">{overview.get('total_faces', 0)}</div><div class="summary-copy">detected face crops</div></section>
-          <section class="summary-card"><h2>Review</h2><div class="summary-big">{overview.get('clarifications_open', 0)}</div><div class="summary-copy">needs a decision</div></section>
-        </section>
-        <form class="searchbar" method="get" action="/app/people" data-auto-submit="true">
-          <input type="search" name="person" placeholder="Find a person" value="{escape(query or '')}">
-          {f'<a href="/app/people"><button class="btn secondary" type="button">Clear</button></a>' if query else ''}
+            """,
+            flash,
+            sync_banner,
+            f"""
+        <div class="people-strap">
+          <span>{overview.get('confirmed_identities', 0)} named people</span>
+          <span>{overview.get('clustered_identities', 0)} clusters</span>
+          <span>{overview.get('total_faces', 0)} faces</span>
+        </div>
+            """,
+        ]
+
+        if selected_identity:
+            selected_label = str(selected_identity.get("label") or "Person")
+            face_assets = manifest.list_assets_for_identity(
+                db_path,
+                str(selected_identity["id"]),
+                limit=PERSON_DETAIL_ASSET_LIMIT,
+            )
+            tagged_assets = manifest.list_assets_tagged_with_person(
+                db_path,
+                selected_label,
+                limit=PERSON_DETAIL_ASSET_LIMIT,
+            )
+            selected_assets_map = OrderedDict()
+            for row in face_assets + tagged_assets:
+                selected_assets_map[str(row["id"])] = row
+            selected_assets = list(selected_assets_map.values())
+            related_clusters = manifest.list_related_identity_candidates(
+                db_path,
+                str(selected_identity["id"]),
+                limit=12,
+                threshold=0.80,
+            )
+            merged_cluster_count = 0
+            for cluster in related_clusters:
+                cluster_id = str(cluster.get("id") or "")
+                if not cluster_id:
+                    continue
+                score = float(cluster.get("score") or 0.0)
+                if score < 0.80:
+                    continue
+                try:
+                    manifest.merge_face_identities(db_path, cluster_id, str(selected_identity["id"]))
+                    merged_cluster_count += 1
+                except Exception as exc:
+                    print(f"[people] auto-merge failed source_identity_id={cluster_id} target_identity_id={selected_identity['id']}: {exc}")
+            if merged_cluster_count:
+                manifest.apply_identity_to_assets(db_path, str(selected_identity["id"]))
+                manifest.refresh_people_for_identity(db_path, str(selected_identity["id"]))
+                face_assets = manifest.list_assets_for_identity(
+                    db_path,
+                    str(selected_identity["id"]),
+                    limit=PERSON_DETAIL_ASSET_LIMIT,
+                )
+                tagged_assets = manifest.list_assets_tagged_with_person(
+                    db_path,
+                    selected_label,
+                    limit=PERSON_DETAIL_ASSET_LIMIT,
+                )
+                selected_assets_map = OrderedDict()
+                for row in face_assets + tagged_assets:
+                    selected_assets_map[str(row["id"])] = row
+                selected_assets = list(selected_assets_map.values())
+                related_clusters = manifest.list_related_identity_candidates(
+                    db_path,
+                    str(selected_identity["id"]),
+                    limit=12,
+                    threshold=0.80,
+                )
+            confirmed_grid = "".join(
+                f"""
+                <a class="people-photo-tile" href="/app/assets/{escape(str(row['id']))}">
+                  <img class="people-photo-image" src="/poster/{escape(str(row['id']))}" alt="{escape(str(row.get('orig_filename') or selected_label))}" loading="lazy" decoding="async">
+                </a>
+                """
+                for row in selected_assets
+            ) or "<div class='people-empty'>No confirmed photos yet.</div>"
+            related_cluster_cards = []
+            for cluster in related_clusters:
+                cluster_id = str(cluster.get("id") or "")
+                if not cluster_id:
+                    continue
+                cover_asset_id = str(cluster.get("cover_asset_id") or "")
+                cover_face_id = str(cluster.get("cover_face_id") or "")
+                cluster_label = str(cluster.get("label") or "Cluster")
+                score_pct = round(float(cluster.get("score") or 0.0) * 100, 1)
+                face_count = int(cluster.get("face_count") or 0)
+                asset_count = int(cluster.get("asset_count") or 0)
+                merge_link = (
+                    f"/app/people/merge?source_identity_id={escape(cluster_id)}"
+                    f"&target_identity_id={escape(str(selected_identity['id']))}"
+                    f"&return_to={quote_plus(people_return_to)}"
+                )
+                if cover_asset_id:
+                    cover_html = f'<img class="people-photo-image" src="/poster/{escape(cover_asset_id)}" alt="{escape(cluster_label)}" loading="lazy" decoding="async">'
+                elif cover_face_id:
+                    cover_html = f'<img class="people-photo-image" src="/face-crop/{escape(cover_face_id)}" alt="{escape(cluster_label)}" loading="lazy" decoding="async">'
+                else:
+                    cover_html = f'<div class="album-cover-placeholder">{escape((cluster_label[:1] or "?").upper())}</div>'
+                related_cluster_cards.append(
+                    f"""
+                    <section class="people-photo-tile" style="position:relative;">
+                      <a href="/app/people?identity_id={escape(cluster_id)}">
+                        {cover_html}
+                      </a>
+                      <div style="position:absolute;top:10px;left:10px;right:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                        <span class="badge">{escape(str(score_pct))}% cluster</span>
+                        <a href="{merge_link}"><button class="btn secondary" type="button">Merge</button></a>
+                      </div>
+                      <div style="position:absolute;left:10px;right:10px;bottom:10px;">
+                        <span class="badge">{escape(cluster_label)} · {face_count} faces · {asset_count} assets</span>
+                      </div>
+                    </section>
+                    """
+                )
+            secondary_grid_parts = []
+            if related_cluster_cards:
+                secondary_grid_parts.append(
+                    """
+                    <div class="section-header" style="grid-column:1 / -1;">
+                      <h2>Related clusters</h2>
+                      <p>Merge only when the whole cluster clearly belongs to this person.</p>
+                    </div>
+                    """
+                )
+                secondary_grid_parts.extend(related_cluster_cards)
+            secondary_grid = "".join(secondary_grid_parts)
+            body_parts.append(
+                f"""
+        <div class="toolbar">
+          <div class="title">
+            <h1>{escape(selected_label)}</h1>
+            <p>{len(selected_assets)} confirmed photos</p>
+          </div>
+          <div class="button-row">
+            <a href="/app/people"><button class="btn secondary" type="button">Back</button></a>
+          </div>
+        </div>
+        <form class="person-name-form compact" method="get" action="/app/people/rename" data-auto-submit="true" style="margin-bottom:14px;">
+          <input type="hidden" name="identity_id" value="{escape(str(selected_identity['id']))}">
+          <input type="hidden" name="return_to" value="{escape(people_return_to)}">
+          <input type="text" name="label" value="{escape(selected_label)}" placeholder="Rename person">
+          <div class="inline-form-note">Press Enter to save the name.</div>
         </form>
-        <section class="card section">
-          <div class="section-header">
-            <h2>People albums</h2>
-            <p>Tap a face album to open it.</p>
-          </div>
-          <section class="album-grid">{album_cards}</section>
+        <div class="people-strap" style="margin-bottom:16px;">
+          <span>{len(selected_assets)} confirmed photos</span>
+          <span>{len(related_cluster_cards)} related clusters</span>
+        </div>
+        <section class="people-photo-grid">
+          {confirmed_grid}
         </section>
-        {f'<section class="card section"><div class="section-header"><h2>{escape(query)}</h2><p>Photos for this person.</p></div><section class="asset-grid">{album_grid}</section></section>' if query else ''}
-        <section class="card section">
-          <div class="section-header">
-            <h2>Needs naming</h2>
-            <p>Close matches waiting for a quick yes or no.</p>
-          </div>
-          <section class="album-grid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));">{clarification_cards}</section>
+        {f'<section class="people-photo-grid" style="margin-top:18px;">{secondary_grid}</section>' if secondary_grid else ''}
+                """
+            )
+        else:
+            body_parts.append(
+                f"""
+        <section class="album-grid">
+          {named_cards}
         </section>
         """
+            )
+        body = "".join(body_parts)
         return _page("People", body, history_html=_history_sidebar_html(db_path))
 
     def _render_review_page(db_path: Path, message: Optional[str] = None) -> str:
-        near_pct = 80
         exact_groups = manifest.list_duplicate_groups(db_path, limit=80, group_type="EXACT_SHA256", status="OPEN")
-        near_groups = manifest.list_duplicate_groups(db_path, limit=80, group_type="NEAR_AHASH", min_score=near_pct / 100.0, status="OPEN")
+        sequence_group_types = ("SNAPCHAT_SEQUENCE", "NEAR_VISUAL", "NEAR_AHASH")
+        sequence_groups_by_id: dict[str, dict] = {}
+        for group_type in sequence_group_types:
+            for group in manifest.list_duplicate_groups(
+                db_path,
+                limit=80,
+                group_type=group_type,
+                status="OPEN",
+            ):
+                sequence_groups_by_id.setdefault(group["id"], group)
+        sequence_groups = sorted(
+            sequence_groups_by_id.values(),
+            key=lambda group: (
+                -float(group.get("match_score") or 0),
+                str(group.get("created_at") or ""),
+                str(group.get("id") or ""),
+            ),
+        )
         blurry_items = manifest.list_assets_with_flag(db_path, "is_blurry", limit=48)
-        review_groups = [
-            (group, "Exact", group.get("item_count", 0), group.get("canonical_filename") or group["id"])
-            for group in exact_groups
-        ] + [
-            (group, f"{escape(str(group.get('match_score_pct') or 0))}%", group.get("item_count", 0), group.get("canonical_filename") or group["id"])
-            for group in near_groups
-        ]
-        review_groups.sort(key=lambda item: (0 if item[1] == "Exact" else 1, -(float(item[0].get("match_score_pct") or 100.0) if item[1] != "Exact" else 100.0), item[3]))
-        queue_cards = []
-        for group, badge, item_count, title in review_groups:
+        top_group = (exact_groups + sequence_groups)[0] if (exact_groups or sequence_groups) else None
+
+        def _group_primary_asset_id(group: dict, items: list[dict]) -> str:
+            canonical_id = group.get("canonical_asset_id")
+            if canonical_id and any(item["asset_id"] == canonical_id for item in items):
+                return canonical_id
+            return items[0]["asset_id"]
+
+        def _review_tile_html(group: dict, item: dict, *, primary: bool = False) -> str:
+            asset_id = item["asset_id"]
+            filename = item.get("orig_filename") or asset_id
+            primary_class = " primary" if primary else ""
+            media_kind = _guess_media_kind(item.get("managed_path"), item.get("media_type"))
+            dt_original = str(item.get("dt_original") or "unknown time")
+            inline_url = f"/inline/{escape(asset_id)}"
+            poster_url = f"/poster/{escape(asset_id)}"
+            media_html = (
+                f"""
+                <video data-review-video controls controlslist="nodownload noplaybackrate" preload="metadata" poster="{poster_url}" muted playsinline>
+                  <source src="{inline_url}">
+                </video>
+                """
+                if media_kind == "video"
+                else f'<img src="{poster_url}" alt="{escape(str(filename))}" loading="lazy" decoding="async">'
+            )
+            file_size = _human_file_size(item.get("orig_size")) or "Unknown size"
+            match_label = _review_sequence_score_label(group)
+            keep_link = f"/app/duplicates/{escape(group['id'])}/keep?asset_id={escape(asset_id)}"
+            hide_link = f"/app/duplicates/{escape(group['id'])}/hide?asset_id={escape(asset_id)}"
+            group_key = escape(group["id"])
+            return f"""
+            <article class="review-card-tile card" data-review-group="{group_key}" data-review-media-kind="{escape(media_kind)}">
+              <div class="review-card-header">
+                <div class="review-card-title">
+                  <div class="review-card-filename">{escape(str(filename))}</div>
+                  <span class="badge">{escape(match_label)}</span>
+                </div>
+                <div class="review-card-meta">
+                  <span>{escape(file_size)}</span>
+                  <span>{escape(dt_original)}</span>
+                </div>
+              </div>
+              <div class="review-card-media{primary_class}" data-review-media-shell>
+                {media_html}
+                <div class="review-card-actions">
+                  <a class="review-card-action keep" href="{keep_link}" title="Keep this one" aria-label="Keep this one">✓</a>
+                  <a class="review-card-action delete" href="{hide_link}" title="Remove this one" aria-label="Remove this one">🗑</a>
+                </div>
+              </div>
+            </article>
+            """
+
+        def _review_group_html(group: dict, *, featured: bool = False) -> str:
             items = manifest.list_duplicate_group_items(db_path, group["id"])
             if not items:
-                continue
-            visible_count = len(items)
-            previews = "".join(_duplicate_tile_html(group["id"], item) for item in items[:4])
-            queue_cards.append(
-                f"""
-                <section class="card review-card duplicate-card">
-                  <div class="duplicate-card-title">
-                    <a class="review-title-link" href="/app/duplicates/{escape(group['id'])}/review"><strong>{escape(str(title))}</strong></a>
-                    <span class="badge">{escape(str(badge))}</span>
-                  </div>
-                  <div class="asset-meta">{visible_count} items · tap a tile to compare or hide</div>
-                  <div class="review-strip">{previews}</div>
-                </section>
-                """
-            )
-        queue_cards_html = "".join(queue_cards) or "<section class='card muted'>No duplicate groups at this threshold.</section>"
-        blurry_cards = "".join(
-            f"""
-            <a class="card album-card" href="/app/assets/{escape(row['id'])}">
-              <img class="album-cover" src="/poster/{escape(row['id'])}" alt="{escape(row.get('orig_filename') or row['id'])}" loading="lazy" decoding="async">
-              <div class="asset-name">{escape(row.get('orig_filename') or row['id'])}</div>
-              <div class="asset-meta">Blurry · {escape(str(row.get('dt_original') or '-'))}</div>
-            </a>
+                return ""
+            primary_asset_id = _group_primary_asset_id(group, items)
+            tiles = "".join(_review_tile_html(group, item, primary=item["asset_id"] == primary_asset_id) for item in items)
+            featured_class = " featured" if featured else ""
+            return f"""
+            <div class="review-group{featured_class}">
+              <div class="review-grid">{tiles}</div>
+            </div>
             """
-            for row in blurry_items
-        ) or "<section class='card muted'>No blurry items flagged.</section>"
-        flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
-        body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>Review</h1>
-            <p>A single cleanup queue for duplicates, near-duplicates, and blurry shots.</p>
-          </div>
+
+        def _blurry_tile_html(row: dict) -> str:
+            asset_id = escape(str(row["id"]))
+            filename = escape(str(row.get("orig_filename") or row["id"]))
+            file_size = escape(_human_file_size(row.get("orig_size")) or "Unknown size")
+            dt_original = escape(str(row.get("dt_original") or "unknown time"))
+            return f"""
+            <article class="review-card-tile card">
+              <div class="review-card-header">
+                <div class="review-card-title">
+                  <div class="review-card-filename">{filename}</div>
+                  <span class="badge">Blur</span>
+                </div>
+                <div class="review-card-meta">
+                  <span>{file_size}</span>
+                  <span>{dt_original}</span>
+                </div>
+              </div>
+              <div class="review-card-media primary">
+                <img src="/poster/{asset_id}" alt="{filename}" loading="lazy" decoding="async">
+              </div>
+            </article>
+            """
+
+        exact_queue_html = "".join(
+            _review_group_html(group, featured=index == 0)
+            for index, group in enumerate(exact_groups)
+        )
+        sequence_queue_html = "".join(
+            _review_group_html(group, featured=False)
+            for group in sequence_groups
+        )
+        exact_delete_all_link = "/app/duplicates/delete-all?group_type=EXACT_SHA256"
+        sequence_delete_all_link = "/app/duplicates/delete-all?group_type=NEAR_DUPLICATES"
+        blurry_group_html = ""
+        if blurry_items:
+            blurry_queue_html = "".join(_blurry_tile_html(row) for row in blurry_items)
+            blurry_group_html = f"""
+          <section class="review-section">
+            <div class="review-section-head">
+              <div>
+                <h2>Blurry items</h2>
+                <p>These are flagged for quality review, but not treated as duplicates.</p>
+              </div>
+              <span class="badge">{len(blurry_items)} items</span>
+            </div>
+            <div class="review-shell">
+              <div class="review-group">
+                <div class="review-grid">{blurry_queue_html}</div>
+              </div>
+            </div>
+          </section>
+            """
+        body_class = "review-page"
+        empty_state = """
+        <div class="review-empty">
+          No review items right now.
         </div>
-        {flash}
-        <section class="review-stack">
-          <section class="review-stats">
-            <section class="review-stat"><h3>Exact</h3><div class="big">{len(exact_groups)}</div><div class="asset-meta">duplicate groups</div></section>
-            <section class="review-stat"><h3>Near</h3><div class="big">{len(near_groups)}</div><div class="asset-meta">groups above the threshold</div></section>
-            <section class="review-stat"><h3>Blur</h3><div class="big">{len(blurry_items)}</div><div class="asset-meta">items to glance at later</div></section>
-          </section>
-          <section class="card section">
-            <div class="section-header">
-              <h2>Duplicate queue</h2>
-              <p>Work from the clearest match to the loosest one.</p>
-            </div>
-            <section class="review-queue">{queue_cards_html}</section>
-          </section>
-          <section class="card section">
-            <div class="section-header">
-              <h2>Blurry</h2>
-              <p>Soft shots that may need a quick look later.</p>
-            </div>
-            <section class="album-grid">{blurry_cards}</section>
-          </section>
-        </section>
         """
-        return _page("Review", body, history_html=_history_sidebar_html(db_path))
+        body = f"""
+        <section class="review-sections">
+          <section class="review-section">
+            <div class="review-section-head">
+              <div>
+                <h2>Exact duplicates</h2>
+                <p>These are 100% hash matches. Keep one and remove the rest.</p>
+              </div>
+              <div class="review-section-head-actions">
+                <a href="{exact_delete_all_link}"><button class="btn secondary" type="button">Delete all</button></a>
+                <span class="badge">{len(exact_groups)} groups</span>
+              </div>
+            </div>
+            <div class="review-shell">
+              {exact_queue_html or "<div class='review-empty'>No exact duplicates right now.</div>"}
+            </div>
+          </section>
+          <section class="review-section">
+            <div class="review-section-head">
+              <div>
+                <h2>Near duplicates</h2>
+                <p>These are the ambiguous Snapchat-style clips and near matches.</p>
+              </div>
+              <div class="review-section-head-actions">
+                <a href="{sequence_delete_all_link}"><button class="btn secondary" type="button">Delete all</button></a>
+                <span class="badge">{len(sequence_groups)} groups</span>
+              </div>
+            </div>
+            <div class="review-shell">
+              {sequence_queue_html or "<div class='review-empty'>No near duplicates right now.</div>"}
+            </div>
+          </section>
+          {blurry_group_html}
+          {empty_state if not exact_groups and not sequence_groups and not blurry_items else ""}
+        </section>
+        <script>
+          (function() {{
+            const groups = new Map();
+            document.querySelectorAll('[data-review-group]').forEach((card) => {{
+              const groupKey = card.getAttribute('data-review-group');
+              const kind = card.getAttribute('data-review-media-kind');
+              if (!groups.has(groupKey)) groups.set(groupKey, []);
+              if (kind === 'video') {{
+                const video = card.querySelector('video');
+                if (video) groups.get(groupKey).push(video);
+              }}
+            }});
+
+            groups.forEach((videos) => {{
+              if (!videos.length) return;
+              let isSyncing = false;
+              const syncPlay = (sourceVideo) => {{
+                if (isSyncing) return;
+                isSyncing = true;
+                const currentTime = Number.isFinite(sourceVideo.currentTime) ? sourceVideo.currentTime : 0;
+                videos.forEach((video) => {{
+                  try {{
+                    video.currentTime = currentTime;
+                  }} catch (error) {{}}
+                }});
+                videos.forEach((video) => {{
+                  if (video.paused || video.ended) {{
+                    const playPromise = video.play();
+                    if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {{}});
+                  }}
+                }});
+                setTimeout(() => {{
+                  isSyncing = false;
+                }}, 0);
+              }};
+
+              videos.forEach((video) => {{
+                video.addEventListener('play', () => {{
+                  syncPlay(video);
+                }});
+                video.addEventListener('seeking', () => {{
+                  if (isSyncing) return;
+                  const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+                  videos.forEach((otherVideo) => {{
+                    if (otherVideo === video) return;
+                    try {{
+                      otherVideo.currentTime = currentTime;
+                    }} catch (error) {{}}
+                  }});
+                }});
+              }});
+            }});
+          }})();
+        </script>
+        """
+        return _page("Review", body, history_html=_history_sidebar_html(db_path), body_class=body_class)
 
     def _render_system_page(current_config: AppConfig, db_path: Path, resolved: Path, message: Optional[str] = None) -> str:
         overview = manifest.get_overview(db_path)
@@ -2111,20 +3291,138 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         return {"items": manifest.list_faces(db_path, limit=limit)}
 
     @app.get("/app/faces/assign")
-    def assign_face(identity_label: str, face_id: str):
+    def assign_face(identity_label: str, face_id: str, return_to: Optional[str] = None):
         _config, _resolved, db_path, _managed = _current_config()
         identities = {item["label"]: item["id"] for item in manifest.list_face_identities(db_path, limit=500)}
         identity_id = identities.get(identity_label)
         if not identity_id:
             identity_id = manifest.create_face_identity(db_path, identity_label)
         manifest.assign_face_identity(db_path, face_id, identity_id)
-        return RedirectResponse(url="/app/people?message=Face+labeled", status_code=303)
+        return RedirectResponse(url=return_to or "/app/people?message=Face+labeled", status_code=303)
 
     @app.get("/app/faces/reject")
-    def reject_face(face_id: str):
+    def reject_face(face_id: str, return_to: Optional[str] = None):
         _config, _resolved, db_path, _managed = _current_config()
         manifest.reject_face(db_path, face_id)
-        return RedirectResponse(url="/app/people?message=Detection+hidden", status_code=303)
+        return RedirectResponse(url=return_to or "/app/people?message=Detection+hidden", status_code=303)
+
+    @app.get("/app/faces/dismiss")
+    def dismiss_face(face_id: str, return_to: Optional[str] = None):
+        _config, _resolved, db_path, _managed = _current_config()
+        manifest.dismiss_face_suggestion(db_path, face_id)
+        return RedirectResponse(url=return_to or "/app/people?message=Suggestion+dismissed", status_code=303)
+
+    @app.get("/app/people/rename")
+    def rename_people_identity(identity_id: str, label: str, return_to: Optional[str] = None):
+        _config, _resolved, db_path, _managed = _current_config()
+        cleaned_label = label.strip()
+        target_url = return_to or "/app/people?message=Person+named"
+        if not cleaned_label:
+            return RedirectResponse(url=return_to or "/app/people?message=Name+required", status_code=303)
+        try:
+            identities = {item["id"]: item for item in manifest.list_face_identities(db_path, limit=5000)}
+            if identity_id not in identities:
+                raise HTTPException(status_code=404, detail="Identity not found")
+            target_identity = next(
+                (item for item in identities.values() if str(item["label"]).lower() == cleaned_label.lower()),
+                None,
+            )
+            if target_identity and target_identity["id"] != identity_id:
+                manifest.rename_face_identity(db_path, target_identity["id"], cleaned_label, status="CONFIRMED")
+                manifest.merge_face_identities(db_path, identity_id, target_identity["id"])
+                manifest.refresh_people_for_identity(db_path, target_identity["id"])
+            else:
+                manifest.rename_face_identity(db_path, identity_id, cleaned_label, status="CONFIRMED")
+                manifest.refresh_people_for_identity(db_path, identity_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[people] rename failed identity_id={identity_id}: {exc}")
+            return RedirectResponse(url=return_to or "/app/people?message=Could+not+save+name", status_code=303)
+        return RedirectResponse(url=target_url, status_code=303)
+
+    @app.get("/app/people/merge")
+    def merge_people_identity(
+        source_identity_id: str,
+        target_identity_id: Optional[str] = None,
+        target_label: Optional[str] = None,
+        return_to: Optional[str] = None,
+    ):
+        _config, _resolved, db_path, _managed = _current_config()
+        try:
+            identities = manifest.list_face_identities(db_path, limit=5000)
+            identity_by_id = {str(item["id"]): item for item in identities}
+            identity_by_label = {str(item["label"]).strip().lower(): item for item in identities if str(item.get("label") or "").strip()}
+            target = identity_by_id.get(str(target_identity_id)) if target_identity_id else None
+            if not target and target_label:
+                target = identity_by_label.get(target_label.strip().lower())
+            if source_identity_id not in identity_by_id or not target:
+                return RedirectResponse(url=return_to or "/app/people?message=Person+not+found", status_code=303)
+            if str(target["id"]) == str(source_identity_id):
+                return RedirectResponse(url=return_to or f"/app/people?identity_id={source_identity_id}&message=Nothing+to+merge", status_code=303)
+            manifest.merge_face_identities(db_path, source_identity_id, str(target["id"]))
+            manifest.rename_face_identity(db_path, str(target["id"]), str(target["label"]), status="CONFIRMED")
+            manifest.apply_identity_to_assets(db_path, str(target["id"]))
+            manifest.refresh_people_for_identity(db_path, str(target["id"]))
+        except Exception as exc:
+            print(f"[people] merge failed source_identity_id={source_identity_id} target_identity_id={target_identity_id}: {exc}")
+            return RedirectResponse(url=return_to or "/app/people?message=Could+not+merge+people", status_code=303)
+        target_url = return_to or f"/app/people?identity_id={target['id']}&message=People+merged"
+        return RedirectResponse(url=target_url, status_code=303)
+
+    @app.get("/app/people/merge-related")
+    def merge_related_people_identities(
+        identity_id: str,
+        return_to: Optional[str] = None,
+        min_score: float = 0.80,
+    ):
+        _config, _resolved, db_path, _managed = _current_config()
+        try:
+            target = manifest.get_face_identity(db_path, identity_id)
+            if not target:
+                return RedirectResponse(url=return_to or "/app/people?message=Person+not+found", status_code=303)
+            related = manifest.list_related_identity_candidates(
+                db_path,
+                identity_id,
+                limit=24,
+                threshold=min_score,
+            )
+            merged = 0
+            for cluster in related:
+                source_identity_id = str(cluster.get("id") or "")
+                if not source_identity_id or source_identity_id == identity_id:
+                    continue
+                manifest.merge_face_identities(db_path, source_identity_id, identity_id)
+                merged += 1
+            manifest.rename_face_identity(db_path, identity_id, str(target.get("label") or "Person"), status="CONFIRMED")
+            manifest.apply_identity_to_assets(db_path, identity_id)
+            manifest.refresh_people_for_identity(db_path, identity_id)
+        except Exception as exc:
+            print(f"[people] merge-related failed identity_id={identity_id}: {exc}")
+            return RedirectResponse(url=return_to or "/app/people?message=Could+not+merge+related+clusters", status_code=303)
+        target_url = return_to or f"/app/people?identity_id={identity_id}"
+        message = "No+strong+related+clusters+found" if merged == 0 else f"Merged+{merged}+related+cluster{'s' if merged != 1 else ''}"
+        separator = "&" if "?" in target_url else "?"
+        return RedirectResponse(url=f"{target_url}{separator}message={message}", status_code=303)
+
+    @app.get("/app/people/prepare-rerun")
+    def prepare_people_rerun(return_to: Optional[str] = None):
+        _config, _resolved, db_path, _managed = _current_config()
+        try:
+            result = manifest.prepare_face_rerun(db_path)
+        except Exception as exc:
+            print(f"[people] prepare-rerun failed: {exc}")
+            target = return_to or "/app/people?message=Could+not+prepare+rerun"
+            return RedirectResponse(url=target, status_code=303)
+        message = quote_plus(
+            "Prepared rerun"
+            f" faces={result.get('cleared_faces', 0)}"
+            f" clusters={result.get('removed_identities', 0)}"
+            f" jobs={result.get('cleared_jobs', 0)}"
+        )
+        target = return_to or "/app/people"
+        separator = "&" if "?" in target else "?"
+        return RedirectResponse(url=f"{target}{separator}message={message}", status_code=303)
 
     @app.get("/thumbnail/{asset_id}")
     def thumbnail(asset_id: str):
@@ -2154,7 +3452,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         if path and path.exists():
             if item and item.get("media_type") in {"image", "raw"} and path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
                 return RedirectResponse(url=f"/inline/{asset_id}", status_code=307)
-            return FileResponse(path, headers={"Cache-Control": "public, max-age=3600"})
+            return FileResponse(path, headers={"Cache-Control": "public, max-age=86400, immutable"})
         if item and item.get("managed_path") and item.get("media_type") in {"image", "raw"}:
             return RedirectResponse(url=f"/inline/{asset_id}", status_code=307)
         svg = """
@@ -2171,7 +3469,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <text x="320" y="565" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Helvetica Neue,sans-serif" font-size="28" fill="#6e6e73">Preview unavailable</text>
         </svg>
         """.strip()
-        return Response(content=svg, media_type="image/svg+xml")
+        return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400, immutable"})
 
     @app.get("/face-crop/{face_id}")
     def face_crop(face_id: str):
@@ -2364,9 +3662,15 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         return RedirectResponse(url="/app/system", status_code=303)
 
     @app.get("/app/people", response_class=HTMLResponse)
-    def people_page(message: Optional[str] = None, person: Optional[str] = None):
+    def people_page(
+        message: Optional[str] = None,
+        person: Optional[str] = None,
+        identity_id: Optional[str] = None,
+        show_review: int = 0,
+        view: str = "confirmed",
+    ):
         _config, _resolved, db_path, _managed = _current_config()
-        return _render_people_page(db_path, message, person)
+        return _render_people_page(db_path, message, person, identity_id, bool(show_review), view)
 
     @app.get("/app/faces", response_class=HTMLResponse)
     def faces_page():
@@ -2382,10 +3686,12 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         media_type: Optional[str] = None,
         review_state: Optional[str] = None,
         favorite_only: int = 0,
+        partial: int = 0,
     ):
         _config, _resolved, db_path, _managed = _current_config()
         per_page = max(24, min(int(per_page or 100), 300))
         page = max(1, int(page or 1))
+        partial_mode = bool(partial)
         total_count = 0
         total_pages = 1
         items: list[dict[str, object]]
@@ -2395,7 +3701,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 q,
                 limit=per_page + 1,
                 offset=(page - 1) * per_page,
-                include_hidden=bool(show_hidden),
+                include_hidden=True,
                 media_type=media_type or None,
             )
             items = list(search_data.get("items", []))
@@ -2408,7 +3714,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     q,
                     limit=per_page + 1,
                     offset=(page - 1) * per_page,
-                    include_hidden=bool(show_hidden),
+                    include_hidden=True,
                     media_type=media_type or None,
                 )
                 items = list(search_data.get("items", []))
@@ -2418,7 +3724,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             total_count = manifest.count_assets(
                 db_path,
                 query=None,
-                include_hidden=bool(show_hidden),
+                include_hidden=True,
                 media_type=media_type or None,
                 favorite_only=bool(favorite_only),
             )
@@ -2430,7 +3736,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 limit=per_page + 1,
                 offset=offset,
                 query=None,
-                include_hidden=bool(show_hidden),
+                include_hidden=True,
                 sort=sort,
                 media_type=media_type or None,
                 review_state=review_state or None,
@@ -2439,6 +3745,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         if q:
             total_pages = max(1, (total_count + per_page - 1) // per_page) if total_count else 1
             offset = (page - 1) * per_page
+        known_people = [row["label"] for row in manifest.list_face_identities(db_path, limit=200, status="CONFIRMED")]
         if media_type:
             items = [row for row in items if row.get("media_type") == media_type]
         if not q and sort == "rated":
@@ -2473,12 +3780,26 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 </section>
                 """
             )
-        hidden_toggle = 0 if show_hidden else 1
-        hidden_label = "Hide Hidden Duplicates" if show_hidden else "Show Hidden Duplicates"
-        query_suffix = f"&q={escape(q)}" if q else ""
-        sort_suffix = f"&sort={escape(sort)}"
-        media_suffix = f"&media_type={escape(media_type)}" if media_type else ""
-        filter_suffix = f"{media_suffix}"
+        def _asset_query_url(*, page_number: int, include_partial: bool = False, include_page: bool = True) -> str:
+            params = []
+            if include_page:
+                params.append(f"page={page_number}")
+            params.append(f"per_page={per_page}")
+            if q:
+                params.append(f"q={quote_plus(str(q))}")
+            if sort:
+                params.append(f"sort={quote_plus(str(sort))}")
+            if media_type:
+                params.append(f"media_type={quote_plus(str(media_type))}")
+            if review_state:
+                params.append(f"review_state={quote_plus(str(review_state))}")
+            if favorite_only:
+                params.append("favorite_only=1")
+            if include_partial:
+                params.append("partial=1")
+            return "/app/assets?" + "&".join(params)
+
+        base_return_url = _asset_query_url(page_number=1, include_page=False)
         sort_options = """
         <option value="recent" {recent}>Recent</option>
         <option value="rated" {rated}>Rated</option>
@@ -2486,56 +3807,46 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             recent="selected" if sort == "recent" else "",
             rated="selected" if sort == "rated" else "",
         )
-        prev_page = max(1, page - 1)
-        next_page = page + 1
-        first_page = 1
-        last_page = max(1, total_pages)
-        prev_link = (
-            f'<a href="/app/assets?page={prev_page}&per_page={per_page}{query_suffix}{sort_suffix}{filter_suffix}&show_hidden={show_hidden}"><button class="btn secondary" type="button">Previous</button></a>'
-            if page > 1
-            else '<button class="btn secondary" type="button" disabled>Previous</button>'
-        )
-        next_link = (
-            f'<a href="/app/assets?page={next_page}&per_page={per_page}{query_suffix}{sort_suffix}{filter_suffix}&show_hidden={show_hidden}"><button class="btn secondary" type="button">Next</button></a>'
-            if has_next
-            else '<button class="btn secondary" type="button" disabled>Next</button>'
-        )
-        first_link = (
-            f'<a href="/app/assets?page={first_page}&per_page={per_page}{query_suffix}{sort_suffix}{filter_suffix}&show_hidden={show_hidden}"><button class="btn secondary" type="button">First</button></a>'
-            if page > 1
-            else '<button class="btn secondary" type="button" disabled>First</button>'
-        )
-        last_link = (
-            f'<a href="/app/assets?page={last_page}&per_page={per_page}{query_suffix}{sort_suffix}{filter_suffix}&show_hidden={show_hidden}"><button class="btn secondary" type="button">Last</button></a>'
-            if has_next
-            else '<button class="btn secondary" type="button" disabled>Last</button>'
-        )
         summary_text = (
             f"Showing {start_item:,}-{end_item:,} of {total_count:,}"
             if total_count
             else "No items found"
         )
-        pager_text = f"Page {page:,} of {total_pages:,}" if total_count else "Page 0 of 0"
-        paging = f"""
-        <div class="page-nav" style="margin-bottom: 16px;">
-          <span class="status-pill">{summary_text}</span>
-          <span class="status-pill">{pager_text}</span>
-          {first_link}
-          {prev_link}
-          {next_link}
-          {last_link}
-        </div>
-        """
+        load_more_label = "Scroll to load more" if has_next else "All assets loaded"
+        chunk_html = "".join(grids) or "<section class='card muted'>No assets found.</section>"
+        if partial_mode:
+            headers = {"X-Next-Page": str(page + 1) if has_next else "0"}
+            return HTMLResponse(chunk_html, headers=headers)
+        people_suggestions = "".join(
+            f'<button class="library-name-chip" type="button" data-library-name="{escape(str(name))}">{escape(str(name))}</button>'
+            for name in known_people[:16]
+        )
         body = f"""
         <div class="toolbar">
           <div class="title">
             <h1>Library</h1>
             <p>Your archive in a gallery-first view, grouped by month like a photo library.</p>
+            <div class="status-pill">{escape(summary_text)}</div>
+          </div>
+          <div class="button-row">
+            <button class="btn secondary library-select-fab" type="button" id="library-select-mode-toggle">Select</button>
           </div>
         </div>
+        <form class="library-select-bar" id="library-select-bar" method="get" action="/app/library/tag-people">
+          <input type="hidden" name="asset_ids" id="library-selected-asset-ids" value="">
+          <input type="hidden" name="return_to" value="{escape(base_return_url)}">
+          <div class="library-select-bar-head">
+            <span class="library-select-bar-count" id="library-selected-count">0 selected</span>
+            <input type="text" name="person" id="library-selected-person" list="library-people-suggestions" placeholder="Type a name and press Enter">
+            <button class="btn secondary" type="button" id="library-clear-selection">Clear</button>
+          </div>
+          <div class="library-name-suggestions">
+            {people_suggestions or "<span class='inline-form-note'>No people labels yet.</span>"}
+          </div>
+          <datalist id="library-people-suggestions">{''.join(f'<option value="{escape(name)}">' for name in known_people)}</datalist>
+        </form>
         <form class="searchbar" method="get" action="/app/assets" data-auto-submit="true">
           <input type="search" name="q" placeholder="Search by dog, receipt, London Bridge, people, or places" value="{escape(q or '')}">
-          <input type="hidden" name="show_hidden" value="{hidden_toggle}">
           <input type="hidden" name="per_page" value="{per_page}">
           <select name="media_type" style="border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px 14px;font:inherit;">
             <option value="">All Media</option>
@@ -2547,11 +3858,188 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <select name="sort" style="border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px 14px;font:inherit;">
             {sort_options}
           </select>
-          <a href="/app/assets?show_hidden={hidden_toggle}{query_suffix}{sort_suffix}{filter_suffix}"><button class="btn secondary" type="button">{hidden_label}</button></a>
         </form>
-        {paging}
-        {''.join(grids) or "<section class='card muted'>No assets found.</section>"}
-        {paging}
+        <div id="library-infinite-root" class="library-infinite-root" data-next-page="{page + 1 if has_next else 0}">
+          {chunk_html}
+        </div>
+        <div class="library-load-more" id="library-load-more" data-has-next="{1 if has_next else 0}">
+          <div class="spinner" aria-hidden="true"></div>
+          <div>{escape(load_more_label)}</div>
+        </div>
+        <script>
+          (function() {{
+            const toggle = document.getElementById('library-select-mode-toggle');
+            const clear = document.getElementById('library-clear-selection');
+            const bar = document.getElementById('library-select-bar');
+            const hiddenInput = document.getElementById('library-selected-asset-ids');
+            const count = document.getElementById('library-selected-count');
+            const personInput = document.getElementById('library-selected-person');
+            const nameChips = Array.from(document.querySelectorAll('[data-library-name]'));
+            const root = document.getElementById('library-infinite-root');
+            const sentinel = document.getElementById('library-load-more');
+            const cards = new Set();
+            if (!toggle || !bar || !hiddenInput || !count || !root) return;
+            const selected = new Set();
+            let pressCard = null;
+            let pressPoint = null;
+            let dragging = false;
+            let dragShouldSelect = true;
+            let lastDraggedId = '';
+            let suppressNextClick = false;
+            let selectMode = false;
+            let nextPage = Number(root.dataset.nextPage || '0');
+            let loadingMore = false;
+
+            function refreshCards() {{
+              cards.clear();
+              root.querySelectorAll('.asset-card[data-asset-id]').forEach((card) => cards.add(card));
+            }}
+
+            function findCardFromPoint(x, y) {{
+              const el = document.elementFromPoint(x, y);
+              return el ? el.closest('.asset-card[data-asset-id]') : null;
+            }}
+
+            function selectCard(card, nextValue) {{
+              if (!card) return;
+              const assetId = card.dataset.assetId || '';
+              if (!assetId) return;
+              if (nextValue) selected.add(assetId);
+              else selected.delete(assetId);
+              sync();
+            }}
+
+            function sync() {{
+              hiddenInput.value = Array.from(selected).join(',');
+              count.textContent = `${{selected.size}} selected`;
+              cards.forEach((card) => {{
+                const selectedNow = selected.has(card.dataset.assetId || '');
+                card.classList.toggle('is-selected', selectedNow);
+                const button = card.querySelector('.asset-select-toggle');
+                if (button) button.textContent = selectedNow ? '✓' : '+';
+              }});
+              bar.classList.toggle('active', selectMode);
+              document.body.classList.toggle('library-select-mode', selectMode);
+              toggle.textContent = selectMode ? 'Done' : 'Select';
+              bar.querySelectorAll('button, input').forEach((field) => {{
+                field.disabled = !selectMode;
+              }});
+              if (personInput) personInput.disabled = !selectMode;
+            }}
+
+            function applyDragSelection(card) {{
+              if (!card) return;
+              const assetId = card.dataset.assetId || '';
+              if (!assetId || assetId === lastDraggedId) return;
+              lastDraggedId = assetId;
+              selectCard(card, dragShouldSelect);
+            }}
+
+            toggle.addEventListener('click', function() {{
+              selectMode = !selectMode;
+              if (!selectMode) selected.clear();
+              sync();
+            }});
+
+            if (clear) {{
+              clear.addEventListener('click', function() {{
+                selected.clear();
+                sync();
+              }});
+            }}
+
+            if (nameChips.length && personInput) {{
+              nameChips.forEach((chip) => {{
+                chip.addEventListener('click', () => {{
+                  personInput.value = chip.getAttribute('data-library-name') || '';
+                  personInput.focus();
+                }});
+              }});
+            }}
+
+            async function loadMore() {{
+              if (!nextPage || loadingMore) return;
+              loadingMore = true;
+              const url = new URL(window.location.href);
+              url.searchParams.set('page', String(nextPage));
+              url.searchParams.set('partial', '1');
+              url.searchParams.set('per_page', '{per_page}');
+              try {{
+                const response = await fetch(url.toString(), {{ headers: {{ 'X-Requested-With': 'fetch' }} }});
+                if (!response.ok) return;
+                const html = await response.text();
+                const template = document.createElement('template');
+                template.innerHTML = html;
+                template.content.childNodes.forEach((node) => {{
+                  root.appendChild(node);
+                }});
+                refreshCards();
+                nextPage = Number(response.headers.get('X-Next-Page') || '0');
+                root.dataset.nextPage = String(nextPage || 0);
+                if (!nextPage && observer) observer.disconnect();
+              }} finally {{
+                loadingMore = false;
+              }}
+            }}
+
+            const observer = ('IntersectionObserver' in window && sentinel) ? new IntersectionObserver((entries) => {{
+              entries.forEach((entry) => {{
+                if (entry.isIntersecting) loadMore();
+              }});
+            }}, {{ rootMargin: '600px 0px' }}) : null;
+
+            if (observer && sentinel) observer.observe(sentinel);
+
+            root.addEventListener('pointerdown', function(event) {{
+              if (!selectMode) return;
+              const card = event.target.closest('.asset-card[data-asset-id]');
+              if (!card) return;
+              event.preventDefault();
+              pressCard = card;
+              pressPoint = {{ x: event.clientX, y: event.clientY }};
+              dragging = false;
+              lastDraggedId = card.dataset.assetId || '';
+              dragShouldSelect = !selected.has(lastDraggedId);
+            }});
+
+            document.addEventListener('pointermove', function(event) {{
+              if (!selectMode || !pressCard) return;
+              const dx = pressPoint ? Math.abs(event.clientX - pressPoint.x) : 0;
+              const dy = pressPoint ? Math.abs(event.clientY - pressPoint.y) : 0;
+              if (!dragging && dx < 6 && dy < 6) return;
+              if (!dragging) {{
+                dragging = true;
+                selectCard(pressCard, dragShouldSelect);
+                lastDraggedId = pressCard.dataset.assetId || '';
+              }}
+              const card = findCardFromPoint(event.clientX, event.clientY);
+              if (card) applyDragSelection(card);
+            }});
+
+            document.addEventListener('pointerup', function() {{
+              if (!selectMode || !pressCard) return;
+              if (!dragging) {{
+                const assetId = pressCard.dataset.assetId || '';
+                if (assetId) selectCard(pressCard, !selected.has(assetId));
+              }}
+              pressCard = null;
+              pressPoint = null;
+              dragging = false;
+              lastDraggedId = '';
+              suppressNextClick = true;
+            }});
+
+            document.addEventListener('click', function(event) {{
+              if (!suppressNextClick) return;
+              suppressNextClick = false;
+              event.preventDefault();
+              event.stopPropagation();
+            }});
+
+            refreshCards();
+            sync();
+          }})();
+        </script>
         """
         return _page("Library", body, history_html=_history_sidebar_html(db_path))
 
@@ -2576,29 +4064,17 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         known_people = [row["label"] for row in manifest.list_face_identities(db_path, limit=200)]
         viewer = _viewer_html(asset_id, item)
         rating_controls = _rating_controls_html(asset_id, item)
+        address_value = _resolve_asset_address(db_path, asset_id, item, metadata_rows)
         shortcut_script = _keyboard_shortcuts_script(
             neighbors.get("prev", {}).get("id") if neighbors.get("prev") else None,
             neighbors.get("next", {}).get("id") if neighbors.get("next") else None,
             asset_id,
         )
         fields = [
-            ("Filename", item.get("orig_filename")),
-            ("Media type", item.get("media_type")),
-            ("Captured", item.get("dt_original")),
-            ("Source", item.get("source")),
-            ("Source kind", item.get("source_kind")),
-            ("File size", f"{item.get('orig_size') or '-'} bytes"),
-            ("Status", item.get("status")),
-            ("Library status", item.get("managed_status")),
+            ("Captured", item.get("dt_original") or "Unknown"),
+            ("File size", _human_file_size(item.get("orig_size")) or "Unknown"),
         ]
-        if item.get("description"):
-            fields.append(("Description", item.get("description")))
-        if item.get("error_msg"):
-            fields.append(("Warning", item.get("error_msg")))
-        rows = "".join(
-            f"<tr><th>{escape(label)}</th><td>{escape(str(value or '-'))}</td></tr>"
-            for label, value in fields
-        )
+        edit_location_value = address_value
         current_people_links = []
         for name in current_people:
             current_people_links.append(
@@ -2611,8 +4087,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         body = f"""
         <div class="toolbar">
           <div class="title">
-            <h1>{escape(item.get('orig_filename') or 'Asset')}</h1>
-            <p>A smoother library-style viewer with normalized metadata and portable provenance.</p>
+            <h1>{escape(item.get('title') or 'Asset')}</h1>
+            <p>Review the file, clean up the metadata, and tag people without bouncing between panels.</p>
           </div>
           <div class="button-row">
             {f'<a href="/app/assets/{escape(neighbors["prev"]["id"])}"><button class="btn secondary" type="button">Previous</button></a>' if neighbors.get("prev") else ''}
@@ -2620,38 +4096,71 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <a href="/app/search?similar_to={escape(asset_id)}"><button class="btn secondary" type="button">Similar</button></a>
           </div>
         </div>
-        <section class="section" style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.9fr);gap:18px;">
-          {viewer}
-          <section class="card">
-            <div class="section-header">
-              <h2>File Details</h2>
-              <p>Core information for this asset.</p>
-            </div>
-            <table class="table"><tbody>{rows}</tbody></table>
-            <div class="section-header" style="margin-top: 16px;">
-              <h2>Quick Rank</h2>
-              <p>Save ratings back onto the asset.</p>
-            </div>
-            <div class="button-row">{rating_controls}</div>
-            <div class="section-header" style="margin-top: 16px;">
-              <h2>Quick person tagger</h2>
-              <p>Add a person name to this asset.</p>
-            </div>
-            <form class="searchbar" method="get" action="/app/assets/{asset_id}/people">
-              <input type="search" name="person" list="people-suggestions-{asset_id}" placeholder="Type a name like Avery" value="">
-              <datalist id="people-suggestions-{asset_id}">
-                {''.join(f'<option value="{escape(name)}">' for name in known_people)}
-              </datalist>
-              <button class="btn secondary" type="submit">Tag person</button>
-            </form>
-            <div class="button-row" style="margin-top: 10px;">
-              {''.join(current_people_links) or "<span class='muted'>No people tagged yet.</span>"}
+        <section class="asset-detail-workspace">
+          <div class="asset-viewer-panel">
+            {viewer}
+          </div>
+          <section class="card asset-detail-panel">
+            <div class="asset-detail-shell">
+              <section class="asset-header-card">
+                <h2>Details</h2>
+                <p>Everything here follows the same pattern: grey fields are reference values, bright fields are yours to edit.</p>
+              </section>
+              <form class="detail-form" method="get" action="/app/assets/{asset_id}/edit">
+                <div class="asset-meta-grid">
+                  <label class="asset-field">
+                    <span class="asset-field-label">{escape(fields[0][0])}</span>
+                    <input type="text" value="{escape(str(fields[0][1]))}" readonly>
+                  </label>
+                  <label class="asset-field">
+                    <span class="asset-field-label">{escape(fields[1][0])}</span>
+                    <input type="text" value="{escape(str(fields[1][1]))}" readonly>
+                  </label>
+                  <label class="asset-field full">
+                    <span class="asset-field-label">Title</span>
+                    <input type="text" name="title" placeholder="Add a title" value="{escape(item.get('title') or '')}">
+                  </label>
+                  <label class="asset-field full">
+                    <span class="asset-field-label">Address</span>
+                    <input type="text" name="address" placeholder="10 Downing Street, London" value="{escape(edit_location_value)}">
+                  </label>
+                  <label class="asset-field full">
+                    <span class="asset-field-label">Description</span>
+                    <textarea name="description" rows="4" placeholder="Add a description">{escape(item.get('description') or '')}</textarea>
+                  </label>
+                </div>
+                <div class="button-row" style="margin-top: 2px;">
+                  <button class="btn" type="submit">Save details</button>
+                </div>
+              </form>
+              <section class="asset-actions-card">
+                <div class="section-header">
+                  <h2>Quick Rank</h2>
+                  <p>One to five is the whole review flow here.</p>
+                </div>
+                <div class="button-row">{rating_controls}</div>
+              </section>
+              <section class="asset-actions-card">
+                <div class="section-header">
+                  <h2>People</h2>
+                  <p>Press Enter to tag someone. Click an existing tag to remove it.</p>
+                </div>
+                <form class="asset-inline-form" method="get" action="/app/assets/{asset_id}/people" data-auto-submit="true">
+                  <input type="search" name="person" list="people-suggestions-{asset_id}" placeholder="Type a name like Avery" value="">
+                  <datalist id="people-suggestions-{asset_id}">
+                    {''.join(f'<option value="{escape(name)}">' for name in known_people)}
+                  </datalist>
+                </form>
+                <div class="asset-tag-strip">
+                  {''.join(current_people_links) or "<span class='status-pill empty'>No people tagged yet.</span>"}
+                </div>
+              </section>
             </div>
           </section>
         </section>
         {shortcut_script}
         """
-        return _page("Asset Detail", body, history_html=_history_sidebar_html(db_path))
+        return _page("Asset Detail", body, history_html=_history_sidebar_html(db_path), body_class="asset-detail-page")
 
     @app.get("/app/assets/{asset_id}/review")
     def review_asset(asset_id: str, rating: Optional[int] = None, favorite: Optional[int] = None, state: Optional[str] = None):
@@ -2677,6 +4186,27 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         manifest.add_asset_person(db_path, asset_id, person)
         return RedirectResponse(url=f"/app/assets/{asset_id}?message=Person+tagged", status_code=303)
 
+    @app.get("/app/library/tag-people")
+    def bulk_tag_people(asset_ids: str, person: str, return_to: Optional[str] = None):
+        _config, _resolved, db_path, _managed = _current_config()
+        cleaned_person = str(person or "").strip()
+        if not cleaned_person:
+            return RedirectResponse(url=return_to or "/app/assets?message=Name+required", status_code=303)
+        ids = [item.strip() for item in str(asset_ids or "").split(",") if item.strip()]
+        if not ids:
+            return RedirectResponse(url=return_to or "/app/assets?message=Nothing+selected", status_code=303)
+        manifest.create_face_identity(db_path, cleaned_person, status="CONFIRMED")
+        tagged = 0
+        for asset_id in ids:
+            item = manifest.get_asset(db_path, asset_id)
+            if not item:
+                continue
+            manifest.add_asset_person(db_path, asset_id, cleaned_person)
+            tagged += 1
+        target = return_to or "/app/assets"
+        separator = "&" if "?" in target else "?"
+        return RedirectResponse(url=f"{target}{separator}message=Tagged+{tagged}", status_code=303)
+
     @app.get("/app/assets/{asset_id}/people/remove")
     def untag_person(asset_id: str, person: str):
         _config, _resolved, db_path, _managed = _current_config()
@@ -2685,6 +4215,41 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             raise HTTPException(status_code=404, detail="Asset not found")
         manifest.remove_asset_person(db_path, asset_id, person)
         return RedirectResponse(url=f"/app/assets/{asset_id}?message=Person+removed", status_code=303)
+
+    @app.get("/app/assets/{asset_id}/edit")
+    def edit_asset_details(asset_id: str, title: Optional[str] = None, description: Optional[str] = None, address: Optional[str] = None):
+        _config, _resolved, db_path, _managed = _current_config()
+        item = manifest.get_asset(db_path, asset_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        kwargs: dict[str, object] = {}
+        if title is not None:
+            kwargs["title"] = title.strip() or None
+        if description is not None:
+            kwargs["description"] = description.strip() or None
+        if kwargs:
+            manifest.apply_metadata_updates(db_path, asset_id, source_name="manual_edit", **kwargs)
+        if address is not None:
+            cleaned_address = address.strip()
+            if cleaned_address:
+                manifest.set_metadata_field(
+                    db_path,
+                    asset_id,
+                    field_name="location",
+                    value=cleaned_address,
+                    source_name="manual_edit",
+                    source_field="Address",
+                    is_canonical=True,
+                )
+            else:
+                manifest.delete_metadata_field(
+                    db_path,
+                    asset_id,
+                    field_name="location",
+                    source_name="manual_edit",
+                    source_field="Address",
+                )
+        return RedirectResponse(url=f"/app/assets/{asset_id}?message=Details+saved", status_code=303)
 
     @app.get("/app/search", response_class=HTMLResponse)
     def search_page(
@@ -2838,73 +4403,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
 
     @app.get("/app/duplicates/{group_id}/review", response_class=HTMLResponse)
     def duplicate_group_review(group_id: str):
-        _config, _resolved, db_path, _managed = _current_config()
-        group = manifest.get_duplicate_group(db_path, group_id)
-        items = manifest.list_duplicate_group_items(db_path, group_id)
-        if not group or len(items) < 2:
-            return RedirectResponse(url="/app/review", status_code=303)
-        badge = "Exact" if group.get("group_type") == "EXACT_SHA256" else f"{escape(str(group.get('match_score_pct') or 0))}%"
-        tiles = "".join(_duplicate_tile_html(group_id, item) for item in items)
-        body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>Compare duplicates</h1>
-            <p>Pick the one to keep or remove a side with the trash icon.</p>
-          </div>
-          <div class="button-row">
-            <a href="/app/review"><button class="btn secondary" type="button">Back to Review</button></a>
-          </div>
-        </div>
-        <section class="card section">
-          <div class="section-header">
-            <h2>{escape(group.get('canonical_filename') or group_id)}</h2>
-            <p>{len(items)} visible items · <span class="badge">{escape(str(badge))}</span></p>
-          </div>
-        </section>
-        <section class="compare-grid">
-          {tiles}
-        </section>
-        """
-        return _page("Compare duplicates", body, history_html=_history_sidebar_html(db_path))
+        return RedirectResponse(url="/app/review", status_code=303)
 
     @app.get("/app/compare", response_class=HTMLResponse)
     def compare_page(left: str, right: str):
-        _config, _resolved, db_path, _managed = _current_config()
-        left_item = manifest.get_asset(db_path, left)
-        right_item = manifest.get_asset(db_path, right)
-        if not left_item or not right_item:
-            raise HTTPException(status_code=404, detail="Compare items not found")
-        body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>Compare</h1>
-            <p>Fast side-by-side review for two assets.</p>
-          </div>
-        </div>
-        <section class="section" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;">
-          <section class="card">
-            <div class="section-header">
-              <h2>{escape(left_item.get('orig_filename') or left_item['id'])}</h2>
-              <p>{escape(str(left_item.get('media_type') or 'unknown'))}</p>
-            </div>
-            {_viewer_html(left_item['id'], left_item)}
-            <div class="button-row" style="margin-top:12px;">
-              <a href="/app/assets/{escape(left_item['id'])}"><button class="btn secondary" type="button">Open</button></a>
-            </div>
-          </section>
-          <section class="card">
-            <div class="section-header">
-              <h2>{escape(right_item.get('orig_filename') or right_item['id'])}</h2>
-              <p>{escape(str(right_item.get('media_type') or 'unknown'))}</p>
-            </div>
-            {_viewer_html(right_item['id'], right_item)}
-            <div class="button-row" style="margin-top:12px;">
-              <a href="/app/assets/{escape(right_item['id'])}"><button class="btn secondary" type="button">Open</button></a>
-            </div>
-          </section>
-        </section>
-        """
-        return _page("Compare", body, history_html=_history_sidebar_html(db_path))
+        return RedirectResponse(url="/app/review", status_code=303)
 
     @app.get("/app/duplicates/{group_id}/resolve")
     def resolve_duplicate_group(group_id: str, canonical_asset_id: str):
@@ -2926,6 +4429,29 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return RedirectResponse(url="/app/review?message=Marked+duplicate+group+as+keep+all", status_code=303)
+
+    @app.get("/app/duplicates/delete-all")
+    def delete_all_duplicate_groups(group_type: str):
+        _config, _resolved, db_path, _managed = _current_config()
+        normalized = str(group_type or "").strip().upper()
+        if normalized == "EXACT_SHA256":
+            target_types = ("EXACT_SHA256",)
+        elif normalized in {"NEAR_DUPLICATES", "NEAR_VISUAL", "NEAR_AHASH", "SNAPCHAT_SEQUENCE"}:
+            target_types = ("SNAPCHAT_SEQUENCE", "NEAR_VISUAL", "NEAR_AHASH")
+        else:
+            raise HTTPException(status_code=400, detail="Unknown duplicate group type")
+        groups_deleted = 0
+        for target_type in target_types:
+            for group in manifest.list_duplicate_groups(db_path, limit=500, group_type=target_type, status="OPEN"):
+                try:
+                    manifest.skip_duplicate_group(db_path, group["id"])
+                    groups_deleted += 1
+                except ValueError:
+                    continue
+        return RedirectResponse(
+            url=f"/app/review?message=Removed+{groups_deleted}+groups+from+review",
+            status_code=303,
+        )
 
     @app.get("/app/duplicates/{group_id}/skip")
     def skip_duplicate_group(group_id: str):

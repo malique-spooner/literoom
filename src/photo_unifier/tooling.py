@@ -54,6 +54,7 @@ LOCKED_STACK_GROUPS = (
         "Search",
         (
             {"name": "SQLite FTS + vector search", "kind": "builtin", "detail": "Built into Photo Unifier"},
+            {"name": "FAISS", "kind": "python", "module": "faiss"},
         ),
     ),
 )
@@ -61,6 +62,7 @@ LOCKED_STACK_GROUPS = (
 OPTIONAL_PYTHON_TOOLS = {
     "whisper": "whisper",
     "open_clip": "open_clip",
+    "faiss": "faiss",
     "insightface": "insightface",
     "ultralytics": "ultralytics",
     "paddleocr": "paddleocr",

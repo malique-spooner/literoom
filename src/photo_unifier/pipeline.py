@@ -55,7 +55,17 @@ def run_ingest(
             batch_size=config.pipeline.batch_size,
             job_id=job_id,
         )
-        return _complete_job(db_path, job_id, "ingest", {"job_id": job_id, "rows_upserted": total})
+        snapchat_sequence_groups = manifest.build_snapchat_sequence_groups(db_path)
+        return _complete_job(
+            db_path,
+            job_id,
+            "ingest",
+            {
+                "job_id": job_id,
+                "rows_upserted": total,
+                "snapchat_sequence_groups": snapchat_sequence_groups,
+            },
+        )
     except Exception as exc:
         _fail_job(db_path, job_id, "ingest", exc, metrics={"sources": [str(p) for p in resolved_sources]})
         raise
@@ -149,6 +159,7 @@ def run_dedupe_near(
             derivatives_dir=config.derivatives_dir(resolved),
             limit=limit,
             max_distance=max_distance,
+            clip_model=config.tools.clip_model,
         )
         return _complete_job(db_path, job_id, "dedupe_near", {"job_id": job_id, **result})
     except Exception as exc:
@@ -275,8 +286,15 @@ def run_face_detection(
             managed_library_dir=config.managed_library_dir(resolved),
             limit=limit,
             force=force,
+            face_model=config.tools.face_model,
         )
         return _complete_job(db_path, job_id, "face_detection", {"job_id": job_id, **result})
     except Exception as exc:
-        _fail_job(db_path, job_id, "face_detection", exc, metrics={"limit": limit, "force": force})
+        _fail_job(
+            db_path,
+            job_id,
+            "face_detection",
+            exc,
+            metrics={"limit": limit, "force": force, "face_model": config.tools.face_model},
+        )
         raise

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
 from typing import Any, Optional
+from urllib.error import URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 _DMS_RE = re.compile(
@@ -250,4 +255,38 @@ def parse_location_candidate(value: Any) -> Optional[dict[str, float]]:
     if isinstance(value, str):
         return _parse_pair_text(value)
 
+    return None
+
+
+@lru_cache(maxsize=512)
+def reverse_geocode_address(lat: float, lon: float) -> Optional[str]:
+    if not (-90.0 <= float(lat) <= 90.0 and -180.0 <= float(lon) <= 180.0):
+        return None
+    url = "https://nominatim.openstreetmap.org/reverse?" + urlencode(
+        {
+            "format": "jsonv2",
+            "lat": f"{float(lat):.7f}",
+            "lon": f"{float(lon):.7f}",
+            "zoom": 18,
+            "addressdetails": 1,
+        }
+    )
+    request = Request(url, headers={"User-Agent": "Photo-Unifier/1.0"})
+    try:
+        with urlopen(request, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (TimeoutError, URLError, json.JSONDecodeError, OSError, ValueError):
+        return None
+    display_name = payload.get("display_name")
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    address = payload.get("address")
+    if isinstance(address, dict):
+        parts = []
+        for key in ("road", "house_number", "neighbourhood", "suburb", "city", "town", "village", "county", "state", "postcode", "country"):
+            value = address.get(key)
+            if value and str(value).strip():
+                parts.append(str(value).strip())
+        if parts:
+            return ", ".join(parts)
     return None

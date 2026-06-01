@@ -147,6 +147,35 @@ Exit criterion:
 
 - the project feels finished, not just functional
 
+## 7. Workflow interface and model upgrade pass
+
+Make the app feel more like Apple Photos and less like a technical console, while also upgrading the core AI models behind the scenes.
+
+- redesign the workflow surface so the home page, Library, People, Review, and System all feel like clear destinations with one job each
+- make People a confirmation workflow, not a cluster browser:
+  - show confirmed people as the primary album grid
+  - open a person into a split detail view with confirmed photos on the left and candidate matches on the right
+  - let naming a person propagate back into clustering so future matches get stronger instead of staying static
+  - remove inline rename controls from the grid and move naming/merge actions into the person detail workflow
+  - hide noisy machine suggestions by default and only surface them as reviewable candidates
+- route true duplicate-looking media out of People and into Review/Duplicates, so the same photo or video does not masquerade as a face cluster
+- keep Review focused on duplicates, blurry items, and quick cleanup actions
+- make search and filters feel instant and obvious, with minimal button-hunting
+- keep the layout calm, compact, and non-technical, with fewer words and fewer competing widgets
+- upgrade the face and enrichment models toward the best local quality path on Apple Silicon:
+  - `YuNet` for face detection
+  - `InsightFace antelopev2` for the highest-quality face recognition / clustering pass
+  - `PaddleOCR` for text extraction
+  - `Whisper` for speech transcription
+  - `OpenCLIP` for semantic search and similarity
+  - `YOLO` for object tags where it adds value
+- prefer quality-first model choices on the M1 Pro Max, even if they are a little heavier, as long as the app remains responsive
+- keep the existing locked stack visible in status/doctor so the model layer is always auditable
+
+Exit criterion:
+
+- the app feels like a polished photo product in daily use, People behaves like a named-person workflow instead of a noisy cluster dump, and the model stack is explicitly chosen for quality rather than convenience
+
 ## Suggested Order
 
 If we want the shortest path to 100%, do this in order:
@@ -154,7 +183,8 @@ If we want the shortest path to 100%, do this in order:
 1. developer experience and pipeline hardening
 2. face, duplicate, and semantic intelligence
 3. review UI polish
-4. docs, smoke tests, and final release cleanup
+4. workflow interface and model upgrades
+5. docs, smoke tests, and final release cleanup
 
 That order reduces rework because the data model, ingest flow, and local setup are stabilized before the later product work lands.
 

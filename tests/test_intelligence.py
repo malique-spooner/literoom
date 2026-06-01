@@ -150,7 +150,7 @@ class IntelligenceTests(unittest.TestCase):
             self.assertGreaterEqual(report["count"], 2)
             self.assertEqual(report["items"][0]["orig_filename"], "favorite.jpg")
 
-    def test_near_confident_face_match_enters_clarification_queue(self):
+    def test_near_confident_face_match_stays_unassigned_for_small_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db_path = root / "manifest.sqlite"
@@ -202,11 +202,12 @@ class IntelligenceTests(unittest.TestCase):
 
             cluster_result = faces.cluster_faces(db_path, similarity_threshold=0.94)
             clarifications = manifest.list_face_clarifications(db_path, limit=10)
+            updated_faces = manifest.list_faces(db_path, limit=10)
 
-            self.assertEqual(cluster_result["clarified"], 1)
-            self.assertEqual(len(clarifications), 1)
-            self.assertEqual(clarifications[0]["suggested_label"], "Ethan")
-            self.assertEqual(manifest.list_faces(db_path, limit=10)[0]["status"], "REVIEW")
+            self.assertEqual(cluster_result["assigned"], 0)
+            self.assertEqual(cluster_result["clarified"], 0)
+            self.assertEqual(clarifications, [])
+            self.assertTrue(any(row["id"] == "face-b" and row["identity_id"] is None for row in updated_faces))
 
 
 if __name__ == "__main__":

@@ -104,7 +104,7 @@ class QualityTests(unittest.TestCase):
 
             self.assertEqual(result["groups"], 1)
             self.assertEqual(len(groups), 1)
-            self.assertEqual(groups[0]["group_type"], "NEAR_AHASH")
+            self.assertEqual(groups[0]["group_type"], "NEAR_VISUAL")
 
     def test_iso6709_location_strings_are_parsed(self):
         payload = parse_location_candidate("+51.5000-0.1200+35.5/")

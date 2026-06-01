@@ -427,6 +427,7 @@ def search_assets_semantic(
             records = [row for row in records if not _is_hidden_asset(con, row["id"])]
         if media_type:
             records = [row for row in records if row.get("media_type") == media_type]
+        embedding_map = _prefetch_embeddings(con, {"asset_text", "asset_visual"})
         ref_text_vec: Optional[list[float]] = None
         ref_visual_vec: Optional[list[float]] = None
         ref_tokens: set[str] = set()
@@ -435,10 +436,10 @@ def search_assets_semantic(
             if ref_rows:
                 ref = ref_rows[0]
                 ref_tokens = set(_tokenize(_asset_search_text(ref)))
-                ref_text_vec = _stored_embedding(con, similar_to, "asset_text") or text_embedding(_asset_search_text(ref))
-                ref_visual_vec = _stored_embedding(con, similar_to, "asset_visual")
+                ref_text_vec = embedding_map.get((similar_to, "asset_text")) or text_embedding(_asset_search_text(ref))
+                ref_visual_vec = embedding_map.get((similar_to, "asset_visual"))
                 if ref_visual_vec is None:
-                    ref_visual_vec = _stored_embedding(con, similar_to, "asset_text")
+                    ref_visual_vec = embedding_map.get((similar_to, "asset_text"))
         scored: list[dict[str, Any]] = []
         for row in records:
             if row["id"] == similar_to:
@@ -447,7 +448,7 @@ def search_assets_semantic(
             tokens = set(_tokenize(text_blob))
             score = 0.0
             reasons: list[str] = []
-            stored_text_vec = _stored_embedding(con, row["id"], "asset_text") or text_embedding(text_blob)
+            stored_text_vec = embedding_map.get((row["id"], "asset_text")) or text_embedding(text_blob)
             if q_vec is not None:
                 text_similarity = _cosine(q_vec, stored_text_vec)
                 token_overlap = len(q_tokens & tokens) / max(1, len(q_tokens))
@@ -468,7 +469,7 @@ def search_assets_semantic(
                 if ref_text_score > 0.2:
                     reasons.append(f"ref-text={ref_text_score:.2f}")
             if ref_visual_vec is not None:
-                cand_visual_vec = _stored_embedding(con, row["id"], "asset_visual")
+                cand_visual_vec = embedding_map.get((row["id"], "asset_visual"))
                 if cand_visual_vec:
                     ref_visual_score = _cosine(ref_visual_vec, cand_visual_vec)
                     score += ref_visual_score * 0.22
@@ -527,6 +528,33 @@ def _stored_embedding(con, asset_id: str, embedding_type: str) -> Optional[list[
         payload = {}
     vector = payload.get("vector") or []
     return [float(item) for item in vector]
+
+
+def _prefetch_embeddings(con, embedding_types: set[str]) -> dict[tuple[str, str], list[float]]:
+    if not embedding_types:
+        return {}
+    placeholders = ", ".join("?" for _ in embedding_types)
+    rows = con.execute(
+        f"""
+        SELECT asset_id, embedding_type, payload_json
+        FROM embeddings
+        WHERE embedding_type IN ({placeholders})
+        ORDER BY created_at DESC, id DESC
+        """,
+        tuple(sorted(embedding_types)),
+    ).fetchall()
+    out: dict[tuple[str, str], list[float]] = {}
+    for row in rows:
+        key = (row["asset_id"], row["embedding_type"])
+        if key in out:
+            continue
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except Exception:
+            payload = {}
+        vector = payload.get("vector") or []
+        out[key] = [float(item) for item in vector]
+    return out
 
 
 def _is_hidden_asset(con, asset_id: str) -> bool:

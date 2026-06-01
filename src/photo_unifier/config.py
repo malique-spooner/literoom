@@ -129,6 +129,7 @@ class AppConfig:
             "PADDLE_PDX_CACHE_HOME": cache_root / "paddlex",
             "HF_HOME": cache_root / "huggingface",
             "TORCH_HOME": cache_root / "torch",
+            "INSIGHTFACE_HOME": cache_root / "insightface",
             "YOLO_CONFIG_DIR": cache_root / "ultralytics",
         }
         for key, path in cache_dirs.items():
@@ -283,7 +284,7 @@ def default_config() -> AppConfig:
             vips=tool_paths.get("libvips"),
             whisper_model="base",
             clip_model="open_clip:ViT-B-32",
-            face_model="opencv_haar_clustered",
+            face_model="antelopev2",
         )
     )
 

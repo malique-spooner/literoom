@@ -56,9 +56,15 @@ def status_cmd(config_path: Path):
 @app.command("doctor")
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
 def doctor_cmd(config_path: Path):
-    config, resolved = _load_runtime_config(config_path)
+    config, resolved = load_config(config_path)
+    config.prepare_runtime_environment(resolved)
     report = build_tool_stack_report(config.tools)
     click.echo(format_tool_stack_report(report))
+    if config.tools.face_model and config.tools.face_model.strip().lower() not in {"opencv_haar_clustered", "haar", "opencv_haar"}:
+        if not report.get("InsightFace", {}).get("ready", False):
+            raise click.ClickException(
+                f"InsightFace is required for the configured face model '{config.tools.face_model}'."
+            )
     if not report.get("required_ready", False):
         raise click.ClickException("Required media tools are missing.")
 

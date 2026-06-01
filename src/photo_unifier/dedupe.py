@@ -2,11 +2,35 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+import numpy as np
+from PIL import Image, ImageOps
 
 from .metadata import manifest
-from .utils.hashing import average_hash, difference_hash, hamming_distance, sha256_file
+from .utils.hashing import sha256_file
+
+try:
+    import imagehash
+except Exception:  # pragma: no cover - optional dependency fallback
+    imagehash = None
+
+try:
+    import faiss  # type: ignore
+except Exception:  # pragma: no cover - optional dependency fallback
+    faiss = None
+
+try:
+    import open_clip  # type: ignore
+    from huggingface_hub import try_to_load_from_cache  # type: ignore
+    import torch  # type: ignore
+except Exception:  # pragma: no cover - optional dependency fallback
+    open_clip = None
+    try_to_load_from_cache = None
+    torch = None
 
 
 def _canonical_asset(items: List[Dict]) -> str:
@@ -19,6 +43,168 @@ def _canonical_asset(items: List[Dict]) -> str:
         ),
     )
     return ranked[0]["id"]
+
+
+def _load_image_for_hash(path: Path) -> Image.Image:
+    with Image.open(path) as img:
+        return ImageOps.exif_transpose(img).convert("RGB")
+
+
+def _hash_size(hash_obj: object) -> int:
+    bits = getattr(hash_obj, "hash", None)
+    size = getattr(bits, "size", 0)
+    try:
+        return max(1, int(size))
+    except Exception:
+        return 1
+
+
+def _imagehash_similarity(left: object, right: object) -> float:
+    if left is None or right is None:
+        return 0.0
+    try:
+        distance = float(left - right)  # type: ignore[operator]
+    except Exception:
+        return 0.0
+    scale = max(_hash_size(left), _hash_size(right))
+    return max(0.0, 1.0 - min(1.0, distance / scale))
+
+
+def _crop_resistant_similarity(left: object, right: object) -> float:
+    if left is None or right is None:
+        return 0.0
+    try:
+        if hasattr(left, "matches") and left.matches(right, hamming_cutoff=12):  # type: ignore[call-arg]
+            return 1.0
+        diff = left.hash_diff(right)  # type: ignore[attr-defined]
+        if isinstance(diff, tuple) and len(diff) >= 2:
+            distance = float(diff[1])
+            scale = max(1.0, float(diff[0]) * 16.0)
+            return max(0.0, 1.0 - min(1.0, distance / scale))
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+def _preview_hash_bundle(path: Path) -> Dict[str, object]:
+    if imagehash is None:
+        raise RuntimeError("imagehash is required for duplicate detection")
+    img = _load_image_for_hash(path)
+    bundle: Dict[str, object] = {
+        "phash": imagehash.phash(img),
+        "dhash": imagehash.dhash(img),
+        "whash": imagehash.whash(img),
+        "colorhash": imagehash.colorhash(img),
+    }
+    try:
+        bundle["crop_hash"] = imagehash.crop_resistant_hash(img)
+    except Exception:
+        bundle["crop_hash"] = None
+    return bundle
+
+
+def _normalize_clip_spec(clip_model: Optional[str]) -> tuple[str, Optional[str]]:
+    raw = (clip_model or "ViT-B-32").strip()
+    if raw.startswith("open_clip:"):
+        raw = raw.split(":", 1)[1].strip()
+    if "@" in raw:
+        model_name, pretrained = raw.split("@", 1)
+        return model_name.strip() or "ViT-B-32", pretrained.strip() or None
+    return raw or "ViT-B-32", None
+
+
+def _clip_pretrained_candidates(pretrained: Optional[str]) -> List[Optional[str]]:
+    if pretrained:
+        return [pretrained]
+    return ["laion2b_s34b_b79k", "laion400m_e32", "openai", None]
+
+
+def _clip_weight_is_cached(model_name: str, pretrained_name: Optional[str]) -> bool:
+    if open_clip is None or try_to_load_from_cache is None:
+        return False
+    try:
+        cfg = open_clip.get_pretrained_cfg(model_name, pretrained_name or "")
+    except Exception:
+        return False
+    repo = str(cfg.get("hf_hub") or "").strip().rstrip("/")
+    if not repo:
+        return False
+    filenames = []
+    if cfg.get("url"):
+        filenames.append(Path(urlparse(str(cfg["url"])).path).name)
+    filenames.extend(["open_clip_model.safetensors", "open_clip_pytorch_model.bin"])
+    for filename in dict.fromkeys(name for name in filenames if name):
+        try:
+            cached = try_to_load_from_cache(repo, filename)
+        except Exception:
+            cached = None
+        if cached:
+            return True
+    return False
+
+
+@lru_cache(maxsize=4)
+def _clip_backend(clip_model: Optional[str]) -> Optional[Dict[str, object]]:
+    if open_clip is None or torch is None:
+        return None
+    model_name, pretrained = _normalize_clip_spec(clip_model)
+    device = "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
+    last_error: Optional[Exception] = None
+    for pretrained_name in _clip_pretrained_candidates(pretrained):
+        if not _clip_weight_is_cached(model_name, pretrained_name):
+            continue
+        try:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                model_name,
+                pretrained=pretrained_name,
+                device=device,
+            )
+            model.eval()
+            return {
+                "model": model,
+                "preprocess": preprocess,
+                "device": device,
+                "spec": f"{model_name}@{pretrained_name or 'default'}",
+            }
+        except Exception as exc:  # pragma: no cover - optional runtime path
+            last_error = exc
+            continue
+    if last_error is not None:
+        return None
+    return None
+
+
+def _clip_embedding(path: Path, clip_model: Optional[str]) -> Optional[List[float]]:
+    backend = _clip_backend(clip_model)
+    if not backend or torch is None:
+        return None
+    model = backend["model"]
+    preprocess = backend["preprocess"]
+    device = backend["device"]
+    try:
+        with Image.open(path) as img:
+            image = ImageOps.exif_transpose(img).convert("RGB")
+        tensor = preprocess(image).unsqueeze(0).to(device)
+        with torch.inference_mode():
+            encoded = model.encode_image(tensor)
+            encoded = encoded / encoded.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        vector = encoded[0].detach().float().cpu().numpy().astype("float32")
+        return vector.tolist()
+    except Exception:
+        return None
+
+
+def _build_faiss_neighbors(vectors: List[List[float]], *, top_k: int = 6):
+    if faiss is None or not vectors:
+        return None
+    matrix = np.asarray(vectors, dtype="float32")
+    if matrix.ndim != 2 or matrix.shape[0] < 2:
+        return None
+    faiss.normalize_L2(matrix)
+    index = faiss.IndexFlatIP(matrix.shape[1])
+    index.add(matrix)
+    scores, indices = index.search(matrix, min(top_k, matrix.shape[0]))
+    return scores, indices
 
 
 def run_exact(
@@ -116,13 +302,19 @@ def _parse_dt(value: Optional[str]) -> Optional[datetime]:
 
 
 def _pair_score(left: Dict, right: Dict) -> tuple[float, str, float]:
-    ah_left = left.get("ahash64")
-    ah_right = right.get("ahash64")
-    dh_left = left.get("dhash64")
-    dh_right = right.get("dhash64")
-    ah_distance = hamming_distance(ah_left, ah_right) if ah_left and ah_right else 64
-    dh_distance = hamming_distance(dh_left, dh_right) if dh_left and dh_right else 64
-    hash_score = 1.0 - ((ah_distance * 0.6 + dh_distance * 0.4) / 64.0)
+    phash_score = _imagehash_similarity(left.get("phash"), right.get("phash"))
+    dhash_score = _imagehash_similarity(left.get("dhash"), right.get("dhash"))
+    whash_score = _imagehash_similarity(left.get("whash"), right.get("whash"))
+    color_score = _imagehash_similarity(left.get("colorhash"), right.get("colorhash"))
+    crop_score = _crop_resistant_similarity(left.get("crop_hash"), right.get("crop_hash"))
+    hash_score = (
+        phash_score * 0.42
+        + dhash_score * 0.23
+        + whash_score * 0.17
+        + color_score * 0.10
+        + crop_score * 0.08
+    )
+    average_distance = round((1.0 - hash_score) * 64.0, 2)
 
     dt_left = _parse_dt(left.get("dt_original"))
     dt_right = _parse_dt(right.get("dt_original"))
@@ -155,10 +347,18 @@ def _pair_score(left: Dict, right: Dict) -> tuple[float, str, float]:
         source_bits.append("same source root")
 
     media_bias = 0.05 if left.get("media_type") == right.get("media_type") else -0.2
-    score = (hash_score * 0.72) + (time_score * 0.18) + source_score + media_bias
-    average_distance = (ah_distance * 0.6) + (dh_distance * 0.4)
+    score = (hash_score * 0.78) + (time_score * 0.14) + source_score + media_bias
+    if crop_score >= 0.95:
+        score += 0.04
     rationale = (
-        f"ahash={ah_distance} dhash={dh_distance} {time_note}"
+        (
+            f"phash={round((1.0 - phash_score) * 64.0, 1)} "
+            f"dhash={round((1.0 - dhash_score) * 64.0, 1)} "
+            f"whash={round((1.0 - whash_score) * 64.0, 1)} "
+            f"color={round((1.0 - color_score) * 64.0, 1)} "
+            f"crop={round((1.0 - crop_score) * 64.0, 1)} "
+        )
+        + f"{time_note}"
         + (f" {'; '.join(source_bits)}" if source_bits else "")
     )
     return score, rationale, average_distance
@@ -171,11 +371,13 @@ def run_near(
     derivatives_dir: Optional[Path] = None,
     limit: Optional[int] = None,
     max_distance: int = 6,
+    clip_model: Optional[str] = None,
 ) -> Dict[str, int]:
     managed_library_dir = Path(managed_library_dir)
     derivatives_dir = Path(derivatives_dir) if derivatives_dir else None
-    processed = hashed = missing = 0
+    processed = hashed = missing = clip_hashed = 0
     buckets: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
+    clip_backend = _clip_backend(clip_model)
 
     for row in manifest.iter_built_assets(db_path=db_path, limit=limit):
         processed += 1
@@ -184,18 +386,28 @@ def run_near(
             missing += 1
             continue
         try:
-            digest = average_hash(preview)
-            diff_digest = difference_hash(preview)
+            bundle = _preview_hash_bundle(preview)
+            clip_vector = _clip_embedding(preview, clip_model)
         except Exception:
             missing += 1
             continue
         hashed += 1
-        manifest.record_hash(db_path, row["id"], "ahash64", "preview", digest)
-        manifest.record_hash(db_path, row["id"], "dhash64", "preview", diff_digest)
+        row = {**row, **bundle, "preview_path": str(preview)}
+        if clip_vector is not None:
+            clip_hashed += 1
+            row["clip_vector"] = clip_vector
+            if clip_backend:
+                manifest.replace_embedding(
+                    db_path,
+                    asset_id=row["id"],
+                    embedding_type="duplicate_visual",
+                    model_name=str(clip_backend["spec"]),
+                    vector=clip_vector,
+                    vector_ref=str(preview),
+                    payload={"path": str(preview), "model": clip_backend["spec"]},
+                )
         day_bucket = (row.get("dt_original") or "")[:10] or "unknown"
-        buckets[(row.get("media_type") or "unknown", day_bucket)].append(
-            {**row, "ahash64": digest, "dhash64": diff_digest, "preview_path": str(preview)}
-        )
+        buckets[(row.get("media_type") or "unknown", day_bucket)].append(row)
 
     groups: List[Dict] = []
     for (_media_type, _day_bucket), items in buckets.items():
@@ -221,6 +433,23 @@ def run_near(
                 if avg_distance <= max_distance or (score >= 0.82 and avg_distance <= max_distance + 4):
                     union(left["id"], right["id"])
 
+        clip_items = [item for item in items if item.get("clip_vector")]
+        neighbor_data = _build_faiss_neighbors([item["clip_vector"] for item in clip_items]) if clip_items and faiss is not None else None
+        if neighbor_data:
+            scores, indices = neighbor_data
+            for i, neighbors in enumerate(indices):
+                source_item = clip_items[i]
+                for rank, j in enumerate(neighbors[1:], start=1):
+                    if j < 0 or j >= len(clip_items):
+                        continue
+                    clip_score = float(scores[i, rank])
+                    if clip_score < 0.95:
+                        continue
+                    candidate_item = clip_items[int(j)]
+                    score, _rationale, _avg_distance = _pair_score(source_item, candidate_item)
+                    if score >= 0.82 or clip_score >= 0.98:
+                        union(source_item["id"], candidate_item["id"])
+
         clusters: Dict[str, List[Dict]] = defaultdict(list)
         for item in items:
             clusters[find(item["id"])].append(item)
@@ -245,12 +474,13 @@ def run_near(
 
     created = manifest.replace_duplicate_groups(
         db_path,
-        group_type="NEAR_AHASH",
+        group_type="NEAR_VISUAL",
         groups=groups,
     )
     return {
         "processed": processed,
         "hashed": hashed,
+        "clip_hashed": clip_hashed,
         "missing": missing,
         "groups": created,
     }
