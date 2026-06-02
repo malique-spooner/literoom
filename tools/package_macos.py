@@ -89,6 +89,7 @@ def main() -> None:
     build_app()
     artifact = build_zip()
     _clean([APP_BUNDLE, LEGACY_COLLECT, DS_STORE])
+    shutil.rmtree(BUILD, ignore_errors=True)
     print(f"Built {artifact}")
 
 
