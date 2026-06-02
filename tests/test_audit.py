@@ -62,7 +62,7 @@ class AuditTests(unittest.TestCase):
             report = build_audit_report(db_path, sample_size=10)
             text = format_audit_report(report)
 
-            self.assertIn("Photo Unifier audit", text)
+            self.assertIn("Literoom audit", text)
             self.assertIn("local (file)", text)
             self.assertIn("google (zip)", text)
             self.assertIn("potential inaccuracies", text)

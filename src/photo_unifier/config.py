@@ -15,7 +15,8 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from .tooling import discover_default_binary_paths
 
 
-DEFAULT_CONFIG_PATH = Path("photo-unifier.local.yaml")
+DEFAULT_CONFIG_PATH = Path("literoom.local.yaml")
+LEGACY_CONFIG_PATH = Path("photo-unifier.local.yaml")
 
 
 @dataclass
@@ -291,6 +292,10 @@ def default_config() -> AppConfig:
 
 def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, Path]:
     path = Path(config_path).resolve()
+    if not path.exists() and path.name == DEFAULT_CONFIG_PATH.name:
+        legacy_path = path.with_name(LEGACY_CONFIG_PATH.name)
+        if legacy_path.exists():
+            path = legacy_path.resolve()
     if not path.exists():
         cfg = default_config()
         return cfg, path
@@ -348,6 +353,7 @@ def save_config(config: AppConfig, config_path: Path | str = DEFAULT_CONFIG_PATH
 __all__ = [
     "AppConfig",
     "DEFAULT_CONFIG_PATH",
+    "LEGACY_CONFIG_PATH",
     "PipelineConfig",
     "ThresholdConfig",
     "ToolPaths",

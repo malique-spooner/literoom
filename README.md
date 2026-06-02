@@ -1,6 +1,6 @@
-# Photo Unifier
+# Literoom
 
-Photo Unifier is a local-first media archive pipeline and local web app. It ingests photos and videos from folders, drives, and ZIP takeouts into a SQLite-backed catalog, plans a clean library, copies canonical assets without touching originals, repairs metadata, prepares previews, and exposes review workflows through a local browser UI.
+Literoom is a local-first media archive pipeline and local web app. It ingests photos and videos from folders, drives, and ZIP takeouts into a SQLite-backed catalog, plans a clean library, copies canonical assets without touching originals, repairs metadata, prepares previews, and exposes review workflows through a local browser UI.
 
 The intended operating model is:
 
@@ -82,37 +82,37 @@ That approach matters most for time, GPS, and people data, where false positives
 2. Write a default config:
 
    ```bash
-   ./.venv/bin/python -m photo_unifier.cli init-config
+   literoom init-config
    ```
 
 3. Ingest sources:
 
    ```bash
-   ./.venv/bin/python -m photo_unifier.cli ingest /path/to/takeout.zip /path/to/media/folder
+   literoom ingest /path/to/takeout.zip /path/to/media/folder
    ```
 
 4. Plan and build the library:
 
    ```bash
-   ./.venv/bin/python -m photo_unifier.cli plan-library
-   ./.venv/bin/python -m photo_unifier.cli build-library
-   ./.venv/bin/python -m photo_unifier.cli build-previews
-   ./.venv/bin/python -m photo_unifier.cli extract-content
-   ./.venv/bin/python -m photo_unifier.cli export-library /path/to/export
+   literoom plan-library
+   literoom build-library
+   literoom build-previews
+   literoom extract-content
+   literoom export-library /path/to/export
    ```
 
 5. Inspect status:
 
    ```bash
-   ./.venv/bin/python -m photo_unifier.cli status
-   ./.venv/bin/python -m photo_unifier.cli jobs
-   ./.venv/bin/python -m photo_unifier.cli doctor
+   literoom status
+   literoom jobs
+   literoom doctor
    ```
 
 6. Run the local API and app:
 
    ```bash
-   ./.venv/bin/python -m photo_unifier.cli serve-api --host 127.0.0.1 --port 8000
+   literoom serve-api --host 127.0.0.1 --port 8000
    ```
 
    Then open:
@@ -148,7 +148,7 @@ Once the virtual environment is created, the `Makefile` gives you short commands
 
 ## Config
 
-Default config path: `photo-unifier.local.yaml`
+Default config path: `literoom.local.yaml`
 
 The config controls:
 
@@ -157,7 +157,7 @@ The config controls:
 - SQLite database location
 - library destination
 - preview output directory
-- the locked Photo Unifier stack:
+- the locked Literoom stack:
   - `exiftool`
   - `ffmpeg`
   - `libvips`

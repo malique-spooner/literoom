@@ -34,7 +34,7 @@ def _load_runtime_config(config_path: Path) -> tuple[object, Path]:
 
 @click.group()
 def app():
-    """Photo Unifier CLI."""
+    """Literoom CLI."""
 
 
 @app.command("init-config")
@@ -291,7 +291,7 @@ def serve_api_cmd(config_path: Path, host: str, port: int):
 
 
 def main():
-    app(prog_name="photo-unifier")
+    app(prog_name="literoom")
 
 
 if __name__ == "__main__":

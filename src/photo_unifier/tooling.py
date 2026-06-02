@@ -53,7 +53,7 @@ LOCKED_STACK_GROUPS = (
     (
         "Search",
         (
-            {"name": "SQLite FTS + vector search", "kind": "builtin", "detail": "Built into Photo Unifier"},
+            {"name": "SQLite FTS + vector search", "kind": "builtin", "detail": "Built into Literoom"},
             {"name": "FAISS", "kind": "python", "module": "faiss"},
         ),
     ),
@@ -113,7 +113,7 @@ def python_tool_status(module_name: str, *, detail: Optional[str] = None) -> Dic
 
 def _sqlite_stack_status() -> Dict[str, Any]:
     ready = True
-    detail = "Built into Photo Unifier"
+    detail = "Built into Literoom"
     try:
         sqlite3.connect(":memory:").close()
     except Exception:

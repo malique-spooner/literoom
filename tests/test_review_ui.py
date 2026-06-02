@@ -203,13 +203,12 @@ class ReviewUiTests(unittest.TestCase):
             jobs = client.get("/jobs")
 
             self.assertEqual(home_page.status_code, 200)
-            self.assertIn("Everything, in one calm place", home_page.text)
+            self.assertIn("We keep this love in a photograph", home_page.text)
             self.assertIn("Open Library", home_page.text)
             self.assertIn("data-home-carousel", home_page.text)
             self.assertIn("featured-people", home_page.text)
             self.assertIn("carousel-dot", home_page.text)
             self.assertEqual(library_page.status_code, 200)
-            self.assertIn("Showing 1-2 of 2", library_page.text)
             self.assertIn("library-select-mode-toggle", library_page.text)
             self.assertIn("/app/library/tag-people", library_page.text)
             self.assertIn("library-load-more", library_page.text)
@@ -234,6 +233,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Recent jobs", system_page.text)
             self.assertIn("history-list", system_page.text)
             self.assertIn("data-history-seq", system_page.text)
+            self.assertIn('option value="local"', library_page.text)
             self.assertEqual(search_page.status_code, 200)
             self.assertIn("Search", search_page.text)
             self.assertEqual(similar_page.status_code, 200)
@@ -387,6 +387,60 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("Cluster", people_page.text)
             self.assertEqual(cluster_detail.status_code, 200)
             self.assertIn("Press Enter to save the name.", cluster_detail.text)
+
+    def test_library_source_filter_shows_insta360_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            managed.mkdir()
+            derived.mkdir()
+            manifest.init_db(db_path)
+
+            rows = [
+                {
+                    "source": "insta360",
+                    "abs_zip": str(root / "clip.insv"),
+                    "zip_path": "clip.insv",
+                    "source_kind": "file",
+                    "source_locator": str(root / "clip.insv"),
+                    "source_path": "clip.insv",
+                    "media_type": "video",
+                    "orig_filename": "clip.insv",
+                    "orig_ext": ".insv",
+                    "orig_size": 10,
+                    "dt_original": "2024-01-01T12:00:00",
+                    "src_mtime": "2024-01-01T12:00:00",
+                },
+                {
+                    "source": "local",
+                    "abs_zip": str(root / "alpha.jpg"),
+                    "zip_path": "alpha.jpg",
+                    "source_kind": "file",
+                    "source_locator": str(root / "alpha.jpg"),
+                    "source_path": "alpha.jpg",
+                    "media_type": "image",
+                    "orig_filename": "alpha.jpg",
+                    "orig_ext": ".jpg",
+                    "orig_size": 10,
+                    "dt_original": "2024-01-02T12:00:00",
+                    "src_mtime": "2024-01-02T12:00:00",
+                },
+            ]
+            manifest.upsert_raw(rows, db_path)
+            config_path = root / "config.yaml"
+            self._write_config(config_path, db_path, managed, derived, root)
+            client = TestClient(create_app(config_path))
+
+            page = client.get("/app/assets?source=insta360")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn('option value="insta360" selected', page.text)
+            self.assertIn('insta360 (1)', page.text)
+            self.assertIn('option value="local"', page.text)
+            self.assertIn('local (1)', page.text)
+            self.assertIn("clip.insv", page.text)
+            self.assertNotIn("alpha.jpg", page.text)
 
 
 

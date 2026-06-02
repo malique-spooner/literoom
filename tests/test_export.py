@@ -15,7 +15,7 @@ class ExportTests(unittest.TestCase):
     def test_run_export_library_copies_built_assets_and_writes_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config_path = root / "photo-unifier.local.yaml"
+            config_path = root / "literoom.local.yaml"
             save_config(AppConfig(), config_path)
 
             managed_dir = root / "library"
@@ -77,8 +77,8 @@ class ExportTests(unittest.TestCase):
             result = run_export_library(config_path, destination=export_dir)
 
             exported_file = export_dir / "2024" / "01" / "example.jpg"
-            manifest_file = export_dir / "photo-unifier-export.jsonl"
-            summary_file = export_dir / "photo-unifier-export-summary.json"
+            manifest_file = export_dir / "literoom-export.jsonl"
+            summary_file = export_dir / "literoom-export-summary.json"
 
             self.assertEqual(result["exported"], 1)
             self.assertEqual(result["skipped"], 0)

@@ -1,0 +1,28 @@
+workspace_root: /Volumes/Extreme SSD/MSp/Photo Unifier
+sources:
+  - /Volumes/Extreme SSD/MSp/Photo Unifier/imports
+paths:
+  db_path: .photo_unifier/manifest.sqlite
+  managed_library_dir: library
+  derivatives_dir: previews
+  logs_dir: logs
+  temp_dir: tmp
+tools:
+  exiftool: /opt/homebrew/bin/exiftool
+  ffmpeg: /opt/homebrew/bin/ffmpeg
+  tesseract: /opt/homebrew/bin/tesseract
+  vips: /opt/homebrew/bin/vips
+  whisper_model: base
+  clip_model: open_clip:ViT-B-32
+  face_model: antelopev2
+pipeline:
+  batch_size: 500
+  max_workers: 4
+  image_thumbnail_size: 512
+  video_preview_offset_seconds: 1
+  managed_naming: '{YYYY}/{YYYY-MM}/{YYYYMMDD}_{hhmmss}_{shortid}'
+  auto_sync_enabled: false
+  auto_sync_interval_seconds: 300
+thresholds:
+  image_phash_distance: 8
+  video_frame_phash_distance: 10

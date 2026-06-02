@@ -1,4 +1,4 @@
-# Photo Unifier Roadmap to 100%
+# Literoom Roadmap to 100%
 
 This is a simple milestone plan to take the project from a solid working foundation to a finished product.
 
@@ -89,7 +89,7 @@ Make the system trustworthy on a full archive.
 - make sample runs and full runs behave the same way
 - cover more odd exports and edge cases
 - verify metadata correctness on more real-world samples
-- validate the locked Photo Unifier stack end to end:
+- validate the locked Literoom stack end to end:
   - `exiftool`
   - `ffmpeg`
   - `libvips`

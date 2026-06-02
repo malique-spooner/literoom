@@ -10,7 +10,7 @@ import json
 
 from .location import parse_location_candidate
 
-VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv"}
+VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv", ".insv"}
 
 def _find_exiftool(exiftool_path: Optional[Path]) -> Optional[str]:
     if exiftool_path:

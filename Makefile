@@ -1,6 +1,6 @@
 PYTHON := ./.venv/bin/python
 PIP := ./.venv/bin/pip
-CONFIG ?= photo-unifier.local.yaml
+CONFIG ?= literoom.local.yaml
 
 .PHONY: setup doctor test status jobs init-config serve
 
@@ -9,19 +9,19 @@ setup:
 	$(PIP) install -e .
 
 doctor:
-	$(PYTHON) -m photo_unifier.cli doctor --config $(CONFIG)
+	literoom doctor --config $(CONFIG)
 
 test:
 	$(PYTHON) -m unittest discover -s tests -t . -q
 
 status:
-	$(PYTHON) -m photo_unifier.cli status --config $(CONFIG)
+	literoom status --config $(CONFIG)
 
 jobs:
-	$(PYTHON) -m photo_unifier.cli jobs --config $(CONFIG)
+	literoom jobs --config $(CONFIG)
 
 init-config:
-	$(PYTHON) -m photo_unifier.cli init-config --config $(CONFIG)
+	literoom init-config --config $(CONFIG)
 
 serve:
-	$(PYTHON) -m photo_unifier.cli serve-api --config $(CONFIG) --host 127.0.0.1 --port 8000
+	literoom serve-api --config $(CONFIG) --host 127.0.0.1 --port 8000

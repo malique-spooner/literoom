@@ -4,6 +4,8 @@ import csv
 import io
 import itertools
 import json
+import shutil
+import subprocess
 import re
 import zipfile
 from dataclasses import dataclass
@@ -34,10 +36,11 @@ IMAGE_EXTS = {
     ".dng", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2",
 }
 RAW_EXTS = {".dng", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
-VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv", ".wmv"}
+VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv", ".wmv", ".insv"}
 MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 
 APPLE_CSV_PREFIX = "Photo Details-"
+INSTA360_LIST_NAME = "fileinfo_list.list"
 
 
 def _classify_media_type(ext: str) -> str:
@@ -53,8 +56,18 @@ def _classify_media_type(ext: str) -> str:
 
 def detect_source(path: Path, inner_names_sample: Iterable[str] = ()) -> str:
     name = path.name.lower()
+    path_text = str(path).lower()
     if "snapchat" in name or name.startswith("mydata~"):
         return "snapchat"
+    if (
+        path.suffix.lower() in {".insv", ".lrv"}
+        or "insta360" in path_text
+        or "dcim/camera01" in path_text
+        or name.startswith("vid_")
+        or name.startswith("lrv_")
+        or name == "fileinfo_list.list"
+    ):
+        return "insta360"
     if "icloud" in name or "apple" in name:
         return "apple"
     if "takeout" in name or "google" in name:
@@ -62,6 +75,8 @@ def detect_source(path: Path, inner_names_sample: Iterable[str] = ()) -> str:
     inner = " ".join(n.lower() for n in itertools.islice(inner_names_sample, 20))
     if "memories_history.json" in inner or "memories_history.html" in inner or "memories/" in inner:
         return "snapchat"
+    if "insta360" in inner or "dcim/camera01" in inner:
+        return "insta360"
     if "takeout" in inner or "metadata.json" in inner:
         return "google"
     if "icloud" in inner or "apple" in inner:
@@ -222,6 +237,202 @@ def _build_apple_csv_index_from_root(root: Path) -> Dict[str, datetime]:
     for csv_path in root.rglob(f"{APPLE_CSV_PREFIX}*.csv"):
         idx.update(_parse_apple_csv_file(csv_path))
     return idx
+
+
+def _normalize_insta360_relpath(value: str) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    while text.startswith("/"):
+        text = text[1:]
+    return text.lower()
+
+
+def _parse_scalar_value(text: str) -> Any:
+    text = text.strip()
+    if not text:
+        return ""
+    if text.startswith('"') and text.endswith('"'):
+        body = text[1:-1]
+        try:
+            return bytes(body, "utf-8").decode("unicode_escape")
+        except Exception:
+            return body
+    if text.startswith("0x"):
+        try:
+            return int(text, 16)
+        except Exception:
+            return text
+    if re.fullmatch(r"-?\d+", text):
+        try:
+            return int(text)
+        except Exception:
+            return text
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        try:
+            return float(text)
+        except Exception:
+            return text
+    return text
+
+
+def _decode_insta360_raw(path: Path) -> Optional[str]:
+    protoc = shutil.which("protoc")
+    if not protoc:
+        return None
+    try:
+        proc = subprocess.run(
+            [protoc, "--decode_raw"],
+            input=path.read_bytes(),
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    try:
+        return proc.stdout.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _parse_insta360_decode_raw(text: str) -> list[dict[str, Any]]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    def parse_block(index: int) -> tuple[dict[str, list[Any]], int]:
+        fields: dict[str, list[Any]] = {}
+        while index < len(lines):
+            line = lines[index]
+            if line == "}":
+                return fields, index + 1
+            match = re.match(r"^(\d+)\s+\{$", line)
+            if match:
+                field = match.group(1)
+                nested, index = parse_block(index + 1)
+                fields.setdefault(field, []).append(nested)
+                continue
+            match = re.match(r"^(\d+):\s*(.*)$", line)
+            if match:
+                field = match.group(1)
+                fields.setdefault(field, []).append(_parse_scalar_value(match.group(2)))
+                index += 1
+                continue
+            index += 1
+        return fields, index
+
+    records: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r"^(\d+)\s+\{$", lines[index])
+        if not match:
+            index += 1
+            continue
+        field = match.group(1)
+        nested, index = parse_block(index + 1)
+        if field == "1":
+            records.append(nested)
+    return records
+
+
+def _parse_insta360_capture_time(entry: dict[str, Any]) -> Optional[datetime]:
+    nested = entry.get("2") or []
+    if not isinstance(nested, list):
+        nested = [nested]
+    payload = nested[0] if nested else {}
+    if not isinstance(payload, dict):
+        return None
+    raw_value = payload.get("7")
+    if isinstance(raw_value, list):
+        raw_value = raw_value[0] if raw_value else None
+    if isinstance(raw_value, int):
+        text = f"{raw_value:014d}"
+    elif raw_value is not None:
+        text = re.sub(r"\D", "", str(raw_value))
+    else:
+        text = ""
+    if len(text) != 14:
+        return None
+    try:
+        return datetime(
+            int(text[0:4]),
+            int(text[4:6]),
+            int(text[6:8]),
+            int(text[8:10]),
+            int(text[10:12]),
+            int(text[12:14]),
+        )
+    except Exception:
+        return None
+
+
+def _build_insta360_index_from_root(root: Path) -> dict[Path, dict[str, dict[str, Any]]]:
+    index: dict[Path, dict[str, dict[str, Any]]] = {}
+    if not root.exists():
+        return index
+    for sidecar in root.rglob(INSTA360_LIST_NAME):
+        decoded = _decode_insta360_raw(sidecar)
+        if not decoded:
+            continue
+        records = _parse_insta360_decode_raw(decoded)
+        if not records:
+            continue
+        sidecar_root = sidecar.parent.parent if sidecar.parent.name.lower() == "dcim" else sidecar.parent
+        entry_map: dict[str, dict[str, Any]] = {}
+        for entry in records:
+            raw_path = entry.get("1")
+            if isinstance(raw_path, list):
+                raw_path = raw_path[0] if raw_path else ""
+            if not raw_path:
+                continue
+            rel_path = _normalize_insta360_relpath(str(raw_path))
+            if not rel_path:
+                continue
+            capture_dt = _parse_insta360_capture_time(entry)
+            entry_map[rel_path] = {
+                "dt_original": capture_dt,
+                "source_dt": "insta360_proto",
+            }
+        if entry_map:
+            index[sidecar_root] = entry_map
+    return index
+
+
+def _resolve_insta360_context(path: Path, index: dict[Path, dict[str, dict[str, Any]]]) -> Optional[dict[str, Any]]:
+    matches: list[tuple[int, Path, dict[str, dict[str, Any]]]] = []
+    for root, entry_map in index.items():
+        try:
+            if path.is_relative_to(root):
+                matches.append((len(root.parts), root, entry_map))
+        except Exception:
+            continue
+    if not matches:
+        return None
+    _, root, entry_map = max(matches, key=lambda item: item[0])
+    rel = _normalize_insta360_relpath(path.relative_to(root).as_posix())
+    if rel in entry_map:
+        payload = dict(entry_map[rel])
+    else:
+        payload = {}
+    payload["source"] = "insta360"
+    return payload
+
+
+def _apply_insta360_context(
+    row: dict[str, Any],
+    path: Path,
+    index: dict[Path, dict[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    context = _resolve_insta360_context(path, index)
+    if not context:
+        return row
+    updated = dict(row)
+    updated["source"] = "insta360"
+    if context.get("dt_original"):
+        updated["dt_original"] = _fmt_naive_iso(context["dt_original"])
+    if context.get("source_dt"):
+        updated["source_dt"] = context["source_dt"]
+    return updated
 
 
 def _build_sidecar_index(files: List[zipfile.ZipInfo]) -> Dict[str, zipfile.ZipInfo]:
@@ -655,8 +866,8 @@ def scan_zip(zip_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict
 
 
 def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
-    src = (source_hint or detect_source(root)).lower()
     apple_csv_idx = _build_apple_csv_index_from_root(root)
+    insta360_idx = _build_insta360_index_from_root(root)
     for path in root.rglob("*"):
         try:
             if not path.is_file():
@@ -666,6 +877,7 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
         if path.suffix.lower() == ".zip":
             yield from scan_zip(path, source_hint=source_hint)
             continue
+        src = (source_hint or detect_source(path)).lower()
         ext = path.suffix.lower()
         media_type = _classify_media_type(ext)
         if media_type not in {"image", "video", "raw"}:
@@ -679,7 +891,7 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
             size = None
         filename_dt = _parse_from_filename(path.name)
         apple_local = apple_csv_idx.get(path.name.lower())
-        yield {
+        row = {
             "source": src,
             "abs_zip": str(path),
             "zip_path": str(path.relative_to(root).as_posix()),
@@ -705,12 +917,16 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
             "source_dt": "apple_csv" if apple_local else ("filename" if filename_dt else "file_mtime"),
             "source_gps": None,
         }
+        yield _apply_insta360_context(row, path, insta360_idx)
 
 
 def scan_file(file_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
     if file_path.suffix.lower() == ".zip":
         yield from scan_zip(file_path, source_hint=source_hint)
         return
+    src = (source_hint or detect_source(file_path)).lower()
+    insta360_root = file_path.parent.parent if len(file_path.parents) > 1 else file_path.parent
+    insta360_idx = _build_insta360_index_from_root(insta360_root)
     ext = file_path.suffix.lower()
     media_type = _classify_media_type(ext)
     if media_type not in {"image", "video", "raw"}:
@@ -723,8 +939,8 @@ def scan_file(file_path: Path, source_hint: Optional[str] = None) -> Iterator[Di
         mtime = None
         size = None
     filename_dt = _parse_from_filename(file_path.name)
-    yield {
-        "source": (source_hint or detect_source(file_path)).lower(),
+    row = {
+        "source": src,
         "abs_zip": str(file_path),
         "zip_path": file_path.name,
         "source_kind": "file",
@@ -749,6 +965,7 @@ def scan_file(file_path: Path, source_hint: Optional[str] = None) -> Iterator[Di
         "source_dt": "filename" if filename_dt else "file_mtime",
         "source_gps": None,
     }
+    yield _apply_insta360_context(row, file_path, insta360_idx)
 
 
 def scan_sources(paths: Iterable[Path], source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
@@ -778,9 +995,21 @@ def run(
         batch.append(row)
         if len(batch) >= batch_size:
             total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
+            if job_id:
+                manifest.attach_job_metrics(
+                    Path(db_path),
+                    job_id,
+                    {"stage": "ingest", "processed_assets": total},
+                )
             batch.clear()
     if batch:
         total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
+        if job_id:
+            manifest.attach_job_metrics(
+                Path(db_path),
+                job_id,
+                {"stage": "ingest", "processed_assets": total},
+            )
         batch.clear()
     return total
 

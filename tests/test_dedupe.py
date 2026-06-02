@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image, ImageDraw
 
@@ -401,6 +403,64 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(loaded.sources[0], "/Volumes/Extreme SSD/MSp/Camera")
             self.assertEqual(loaded.pipeline.batch_size, 123)
             self.assertEqual(loaded.pipeline.auto_sync_interval_seconds, 120)
+
+    def test_run_ingest_now_action_triggers_manual_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            import_dir = root / "imports"
+            managed.mkdir()
+            derived.mkdir()
+            import_dir.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "workspace_root: .",
+                        "sources:",
+                        f"  - {import_dir}",
+                        "paths:",
+                        f"  db_path: {db_path}",
+                        f"  library_dir: {managed}",
+                        f"  previews_dir: {derived}",
+                        f"  logs_dir: {root / 'logs'}",
+                        f"  temp_dir: {root / 'tmp'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            client = TestClient(create_app(config_path))
+
+            called = []
+            finished = threading.Event()
+
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None):
+                called.append(
+                    (
+                        Path(config_path_arg),
+                        source_tag,
+                        [Path(item) for item in (sources or [])],
+                    )
+                )
+                finished.set()
+                return {"rows_upserted": 0}
+
+            with mock.patch("photo_unifier.api.run_ingest", side_effect=fake_run_ingest) as ingest_mock, mock.patch(
+                "photo_unifier.api.run_face_detection"
+            ) as face_mock:
+                response = client.get("/app/actions/run-now", follow_redirects=False)
+                self.assertEqual(response.status_code, 303)
+                self.assertTrue(finished.wait(2))
+                ingest_mock.assert_called_once()
+                face_mock.assert_not_called()
+
+            self.assertEqual(called[0][1], "manual")
+            self.assertEqual(called[0][2], [import_dir.resolve()])
+            self.assertIn("Run ingest now", client.get("/app/settings").text)
 
     def test_keep_all_route_marks_group(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,7 +10,6 @@ from typing import Optional
 import json
 import mimetypes
 import threading
-import time
 from urllib.parse import quote_plus
 
 from PIL import Image
@@ -27,19 +26,24 @@ from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config, save_config
 from . import intelligence
 from .derivatives import _build_image_thumbnail
 from .metadata import manifest
-from .pipeline import run_face_detection, run_full_pipeline
+from .pipeline import run_face_detection, run_ingest
 from .utils.location import reverse_geocode_address
 from .tooling import build_tool_stack_report
+
+
+LOGO_PATH = Path(__file__).resolve().parents[2] / "literoom logo.png"
+FAVICON_PATH = Path(__file__).resolve().parents[2] / "literoom favicon.png"
 
 
 def _page(title: str, body: str, *, history_html: str = "", body_class: str = "") -> str:
     body_class_attr = f' class="{escape(body_class)}"' if body_class else ""
     return f"""<!doctype html>
 <html lang="en">
-  <head>
+    <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{escape(title)}</title>
+    <link rel="icon" type="image/png" href="/favicon.png?v=2">
     <style>
       :root {{
         --bg: #eef2f7;
@@ -89,10 +93,42 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         flex-direction: column;
       }}
       .brand {{
-        font-size: 1.05rem;
-        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 1.35rem;
+        font-weight: 800;
         margin: 0 10px 24px;
-        letter-spacing: -.02em;
+        letter-spacing: -.04em;
+      }}
+      .brand-mark {{
+        width: 42px;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        border-radius: 14px;
+        overflow: hidden;
+        background: transparent;
+        box-shadow: none;
+      }}
+      .brand-mark img {{
+        width: 42px;
+        height: 42px;
+        display: block;
+        object-fit: cover;
+        border-radius: 14px;
+      }}
+      .brand-wordmark {{
+        display: inline-flex;
+        align-items: baseline;
+        gap: 1px;
+        font-size: 1.35rem;
+        font-weight: 800;
+      }}
+      .brand-wordmark .room {{
+        color: #0a84ff;
       }}
       .nav-group {{
         display: grid;
@@ -144,8 +180,8 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         overscroll-behavior: contain;
       }}
       .home-page .main {{
-        display: grid;
-        grid-template-rows: min-content min-content min-content minmax(0, 1fr);
+        display: flex;
+        flex-direction: column;
         gap: 12px;
         overflow: hidden;
       }}
@@ -233,6 +269,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         grid-template-columns: minmax(0, 1fr);
         gap: 14px;
         margin-bottom: 0;
+        align-items: stretch;
       }}
       .hero-panel {{
         background: linear-gradient(180deg, rgba(255,255,255,.68), rgba(255,255,255,.38));
@@ -244,6 +281,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       }}
       .home-page .hero-panel {{
         padding: 18px;
+        min-height: 170px;
       }}
       .hero-copy {{
         display: grid;
@@ -328,6 +366,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
         min-height: 0;
+        flex: 1 1 auto;
       }}
       .home-panel {{
         min-height: 0;
@@ -346,46 +385,72 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         display: none;
       }}
       .home-page .hero-card {{
-        grid-template-columns: minmax(0, 1.12fr) minmax(260px, .88fr);
-        gap: 10px;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 16px;
         margin-bottom: 0;
+        align-items: stretch;
       }}
       .home-page .hero-copy {{
-        min-height: 92px;
-        gap: 4px;
+        min-height: 124px;
+        gap: 10px;
+        padding: 4px 0 0;
+        align-content: center;
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+        backdrop-filter: none;
+      }}
+      .home-page .quote-stack {{
+        display: grid;
+        gap: 8px;
+        width: max-content;
+        max-width: 100%;
       }}
       .home-page .hero-copy p {{
         display: none;
       }}
       .home-page .hero-copy h1 {{
-        font-size: clamp(1.5rem, 2.2vw, 2.1rem);
+        max-width: none;
+        font-size: clamp(1.85rem, 3vw, 3.1rem);
+        line-height: 1;
+        letter-spacing: 0;
+        font-weight: 800;
+        white-space: nowrap;
+      }}
+      .home-page .quote-source {{
+        text-align: right;
+        color: var(--muted);
+        font-size: clamp(1rem, 1.4vw, 1.35rem);
+        font-weight: 650;
       }}
       .home-page .hero-panel {{
-        padding: 10px;
+        padding: 14px;
       }}
       .home-page .hero-people-panel {{
         background: transparent;
         border: 0;
         box-shadow: none;
         padding: 0;
+        min-height: 124px;
         display: grid;
-        align-items: center;
+        align-items: stretch;
       }}
       .featured-people {{
-        display: flex;
-        align-items: stretch;
-        gap: 5px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
         width: 100%;
-        height: clamp(58px, 7vw, 78px);
+        height: 100%;
+        min-height: 124px;
         overflow: hidden;
       }}
       .featured-person {{
         display: block;
-        flex: 1 1 0;
         min-width: 0;
+        min-height: 0;
         aspect-ratio: 1 / 1;
         overflow: hidden;
-        border-radius: 14px;
+        border-radius: 18px;
         background: rgba(255,255,255,.06);
       }}
       .featured-person img {{
@@ -395,69 +460,143 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         display: block;
       }}
       .home-carousel {{
-        position: relative;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 10px;
         width: 100%;
         height: 100%;
         min-height: 0;
         border-radius: 0;
         overflow: hidden;
+      }}
+      .home-carousel-head {{
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .home-carousel-title {{
+        display: grid;
+        gap: 2px;
+      }}
+      .home-carousel-title strong {{
+        font-size: 1.02rem;
+      }}
+      .home-carousel-title span {{
+        color: var(--muted);
+        font-size: .82rem;
       }}
       .carousel-stage {{
         position: relative;
         width: 100%;
         height: 100%;
         min-height: 0;
-        border-radius: 0;
+        border-radius: 18px;
         overflow: hidden;
-        background: transparent;
+        background: rgba(255,255,255,.14);
       }}
-      .carousel-slide {{
+      .recent-tile,
+      .on-this-day-tile {{
         position: absolute;
         inset: 0;
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity .35s ease, visibility .35s ease;
+      }}
+      .recent-tile.is-active,
+      .on-this-day-tile.is-active {{
+        opacity: 1;
+        visibility: visible;
+      }}
+      .recent-thumb,
+      .on-this-day-thumb {{
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 18px;
+        overflow: hidden;
+        background: rgba(255,255,255,.06);
+      }}
+      .recent-thumb img,
+      .recent-thumb video,
+      .on-this-day-thumb img,
+      .on-this-day-thumb video {{
         width: 100%;
         height: 100%;
         object-fit: cover;
-        opacity: 0;
-        transition: opacity .45s ease;
+        display: block;
+        background: rgba(15,23,42,.08);
       }}
-      .carousel-slide.is-active {{
-        opacity: 1;
+      .recent-badge,
+      .on-this-day-badge {{
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: fit-content;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(255,255,255,.56);
+        color: var(--text);
+        font-size: .72rem;
       }}
       .carousel-dots {{
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 12px;
         display: flex;
-        justify-content: center;
+        align-items: center;
+        justify-content: flex-end;
         gap: 6px;
-        z-index: 2;
       }}
       .carousel-dot {{
-        width: 6px;
-        height: 6px;
+        width: 7px;
+        height: 7px;
         border: 0;
         border-radius: 999px;
-        background: rgba(255,255,255,.46);
-        opacity: .9;
+        padding: 0;
+        background: rgba(15,23,42,.18);
+        cursor: pointer;
       }}
       .carousel-dot.is-active {{
         width: 18px;
-        background: rgba(255,255,255,.96);
+        background: rgba(15,23,42,.72);
       }}
-      .home-map {{
+      .on-this-day {{
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 10px;
         width: 100%;
         height: 100%;
         min-height: 0;
-        border-radius: 0;
         overflow: hidden;
-        background: transparent;
       }}
-      .home-map svg {{
-        display: block;
-        width: 100%;
-        height: 100%;
-        min-height: 0;
+      .on-this-day-head {{
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .on-this-day-title {{
+        display: grid;
+        gap: 2px;
+      }}
+      .on-this-day-title strong {{
+        font-size: 1.02rem;
+      }}
+      .on-this-day-title span {{
+        color: var(--muted);
+        font-size: .82rem;
+      }}
+      .on-this-day-empty {{
+        display: grid;
+        place-items: center;
+        min-height: 100%;
+        color: var(--muted);
+        text-align: center;
+        padding: 18px;
       }}
       .home-page .home-panels {{
         gap: 10px;
@@ -468,14 +607,17 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       .home-page .home-panel {{
         padding: 0;
       }}
+      .home-page .home-panel > * {{
+        min-height: 0;
+      }}
       .home-page .summary-card {{
-        padding: 12px;
+        padding: 10px 11px;
       }}
       .home-page .summary-big {{
-        font-size: 1.6rem;
+        font-size: 1.4rem;
       }}
       .home-page .metrics {{
-        gap: 8px;
+        gap: 7px;
         margin-bottom: 0;
       }}
       .home-page .button-row {{
@@ -494,10 +636,10 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         box-shadow: 0 18px 42px rgba(15,23,42,.10);
       }}
       .home-page .summary-card {{
-        padding: 16px;
+        padding: 12px 14px;
       }}
       .home-page .summary-big {{
-        font-size: 2rem;
+        font-size: 1.75rem;
       }}
       .card.soft {{
         background: rgba(255,255,255,.36);
@@ -1730,6 +1872,17 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         height: 100%;
         border-radius: inherit;
         background: linear-gradient(90deg, #0a84ff, #7ab7ff);
+        transition: width .2s ease, background .2s ease, box-shadow .2s ease;
+      }}
+      .progress-fill.is-running {{
+        background: linear-gradient(90deg, #0a84ff, #7ab7ff);
+      }}
+      .progress-fill.is-complete {{
+        background: linear-gradient(90deg, #18a957, #7adf9b);
+        box-shadow: 0 0 0 1px rgba(24,169,87,.12) inset;
+      }}
+      .progress-fill.is-idle {{
+        background: linear-gradient(90deg, rgba(15,23,42,.18), rgba(15,23,42,.34));
       }}
       .status-pill {{
         display: inline-flex;
@@ -1814,6 +1967,22 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
           height: auto;
           overflow: visible;
         }}
+        .home-page .main {{
+          overflow: visible;
+        }}
+        .home-page .hero-card,
+        .home-panels {{
+          grid-template-columns: 1fr;
+        }}
+        .home-page .hero-card {{
+          display: grid;
+        }}
+        .home-page .hero-people-panel {{
+          min-height: 96px;
+        }}
+        .home-panels {{
+          min-height: 640px;
+        }}
         .asset-detail-page .main {{
           height: auto;
           overflow: visible;
@@ -1845,7 +2014,12 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
   <body{body_class_attr}>
     <div class="app">
       <aside class="sidebar">
-        <a class="brand" href="/">Photo Unifier</a>
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="/logo.png" alt="" aria-hidden="true">
+          </span>
+          <span class="brand-wordmark"><span>lite</span><span class="room">Room</span></span>
+        </a>
         <div class="nav-group">
           <a class="nav-item" href="/app/assets">Library</a>
           <a class="nav-item" href="/app/people">People</a>
@@ -1853,7 +2027,6 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
           <a class="nav-item" href="/app/system">System</a>
         </div>
         {history_html}
-        <div class="sidebar-foot"><a href="/docs">API Docs</a></div>
       </aside>
       <main class="main">
         {body}
@@ -1884,12 +2057,27 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         document.querySelectorAll('[data-home-carousel="true"]').forEach((carousel) => {{
           const slides = Array.from(carousel.querySelectorAll('[data-carousel-slide]'));
           const dots = Array.from(carousel.querySelectorAll('[data-carousel-dot]'));
+          const subtitle = carousel.querySelector('[data-carousel-subtitle]');
           if (!slides.length) return;
           let index = 0;
           const show = (nextIndex) => {{
             index = (nextIndex + slides.length) % slides.length;
-            slides.forEach((slide, i) => slide.classList.toggle('is-active', i === index));
+            slides.forEach((slide, i) => {{
+              const active = i === index;
+              slide.classList.toggle('is-active', active);
+              slide.querySelectorAll('video').forEach((video) => {{
+                if (active) {{
+                  const playPromise = video.play();
+                  if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {{}});
+                }} else {{
+                  video.pause();
+                }}
+              }});
+            }});
             dots.forEach((dot, i) => dot.classList.toggle('is-active', i === index));
+            if (subtitle && slides[index] && slides[index].dataset.carouselGroupLabel) {{
+              subtitle.textContent = slides[index].dataset.carouselGroupLabel;
+            }}
           }};
           dots.forEach((dot, i) => {{
             dot.addEventListener('click', () => show(i));
@@ -1897,6 +2085,56 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
           show(0);
           window.setInterval(() => show(index + 1), parseInt(carousel.dataset.interval || '5000', 10));
         }});
+        const progressWidgets = Array.from(document.querySelectorAll('[data-live-progress-widget]'));
+        if (progressWidgets.length) {{
+          const renderProgress = (payload) => {{
+            const live = payload && payload.live_progress ? payload.live_progress : {{}};
+            const importProgress = payload && payload.import_progress ? payload.import_progress : {{}};
+            progressWidgets.forEach((widget) => {{
+              const fill = widget.querySelector('[data-live-progress-fill]');
+              const value = widget.querySelector('[data-live-progress-value]');
+              const copy = widget.querySelector('[data-live-progress-copy]');
+              const detail = widget.querySelector('[data-live-progress-detail]');
+              const pct = live.percent_complete;
+              const hasTotal = Number.isFinite(pct);
+              const state = live.state || (hasTotal && Number(pct) >= 100 ? 'complete' : 'idle');
+              const total = live.total_assets ?? importProgress.total_assets ?? 0;
+              const done = live.processed_assets ?? importProgress.ready_assets ?? 0;
+              const remaining = live.remaining_assets ?? importProgress.pending_assets ?? Math.max((total || 0) - (done || 0), 0);
+              if (fill) {{
+                fill.classList.remove('is-running', 'is-complete', 'is-idle');
+                fill.classList.add(state === 'running' || state === 'queued' ? 'is-running' : state === 'complete' ? 'is-complete' : 'is-idle');
+              }}
+              if (fill) {{
+                fill.style.width = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : '0%';
+              }}
+              if (value) {{
+                value.textContent = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : (done ? `${{done}} done` : 'Waiting');
+              }}
+              if (copy) {{
+                copy.textContent = hasTotal
+                  ? `${{done.toLocaleString()}} of ${{Number(total).toLocaleString()}} done, ${{Number(remaining).toLocaleString()}} left`
+                  : (state === 'idle' ? '' : (live.detail || ''));
+                copy.style.display = copy.textContent ? '' : 'none';
+              }}
+              if (detail) {{
+                detail.textContent = state === 'idle' ? '' : (live.detail || '');
+                detail.style.display = detail.textContent ? '' : 'none';
+              }}
+              widget.dataset.liveState = state;
+            }});
+          }};
+          const refreshProgress = () => {{
+            fetch('/progress', {{ headers: {{ 'Accept': 'application/json' }} }})
+              .then((response) => response.ok ? response.json() : null)
+              .then((payload) => {{
+                if (payload) renderProgress(payload);
+              }})
+              .catch(() => {{}});
+          }};
+          refreshProgress();
+          window.setInterval(refreshProgress, 2000);
+        }}
       }})();
     </script>
   </body>
@@ -1925,6 +2163,75 @@ def _friendly_history_label(action_type: str) -> str:
     return labels.get(action_type, action_type.replace("_", " ").title())
 
 
+def _json_object(value: Optional[str]) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _live_progress_snapshot(db_path: Path) -> dict:
+    import_progress = manifest.get_import_progress(db_path)
+    pipeline_health = manifest.get_pipeline_health(db_path)
+    jobs = manifest.list_jobs(db_path, limit=12)
+    active_job = next(
+        (
+            job
+            for job in jobs
+            if str(job.get("status") or "") in {"QUEUED", "RUNNING"}
+            and str(job.get("job_type") or "") in {"ingest", "build_library", "build_derivatives", "metadata_repair"}
+        ),
+        None,
+    )
+    live_progress = {
+        "state": "idle",
+        "label": "",
+        "detail": "",
+        "processed_assets": None,
+        "remaining_assets": None,
+        "total_assets": import_progress.get("total_assets", 0),
+        "percent_complete": import_progress.get("completion_pct", 0.0),
+    }
+    if active_job:
+        metrics = _json_object(active_job.get("metrics_json"))
+        job_type = str(active_job.get("job_type") or "")
+        if job_type == "build_library" and metrics.get("total_assets") is not None:
+            total = int(metrics.get("total_assets") or 0)
+            done = int(metrics.get("processed_assets") or 0)
+            remaining = int(metrics.get("remaining_assets") or max(total - done, 0))
+            percent = round((done / total) * 100, 1) if total else 0.0
+            live_progress = {
+                "state": str(active_job.get("status") or "RUNNING").lower(),
+                "label": "Building library",
+                "detail": f"{done:,} done, {remaining:,} left",
+                "processed_assets": done,
+                "remaining_assets": remaining,
+                "total_assets": total,
+                "percent_complete": percent,
+            }
+        elif job_type == "ingest":
+            done = int(metrics.get("processed_assets") or 0)
+            live_progress = {
+                "state": str(active_job.get("status") or "RUNNING").lower(),
+                "label": "Importing sources",
+                "detail": f"{done:,} assets imported so far",
+                "processed_assets": done,
+                "remaining_assets": None,
+                "total_assets": None,
+                "percent_complete": None,
+            }
+    return {
+        "import_progress": import_progress,
+        "pipeline": pipeline_health,
+        "jobs": jobs,
+        "active_job": active_job,
+        "live_progress": live_progress,
+    }
+
+
 PERSON_DETAIL_ASSET_LIMIT = 5000
 
 
@@ -1937,108 +2244,145 @@ def _mercator_point(lat: float, lon: float) -> tuple[float, float]:
     return (x, y)
 
 
-def _render_home_recent_panel(recent_assets: list[dict]) -> str:
-    if not recent_assets:
-        return """
-        <div class="home-carousel" aria-label="Recent media carousel">
-          <div class="carousel-stage"></div>
+def _home_carousel_media_html(row: dict, class_name: str) -> str:
+    asset_id = str(row["id"])
+    filename = str(row.get("orig_filename") or asset_id)
+    media_kind = _guess_media_kind(row.get("managed_path"), row.get("media_type"))
+    poster_url = f"/poster/{escape(asset_id)}"
+    if media_kind == "video" and row.get("managed_path"):
+        return f"""
+        <div class="{class_name}">
+          <video muted loop playsinline preload="none" poster="{poster_url}">
+            <source src="/inline/{escape(asset_id)}">
+          </video>
         </div>
         """
-    slides = recent_assets[:20]
-    slide_imgs = []
-    dots = []
-    for index, row in enumerate(slides):
-        active = " is-active" if index == 0 else ""
-        slide_imgs.append(
-            f'<img class="carousel-slide{active}" src="/poster/{escape(row["id"])}" alt="{escape(row.get("orig_filename") or row["id"])}" loading="lazy" decoding="async" data-carousel-slide="{index}">'
-        )
-        dots.append(f'<button class="carousel-dot{" is-active" if index == 0 else ""}" type="button" aria-label="Show item {index + 1}" data-carousel-dot="{index}"></button>')
     return f"""
-    <div class="home-carousel" data-home-carousel="true" data-interval="5000" aria-label="Recent media carousel">
-      <div class="carousel-stage">
-        {''.join(slide_imgs)}
-      </div>
-      <div class="carousel-dots">{''.join(dots)}</div>
+    <div class="{class_name}">
+      <img src="{poster_url}" alt="{escape(filename)}" loading="lazy" decoding="async">
     </div>
     """
 
 
-def _render_home_map_panel(db_path: Path) -> str:
-    rows = manifest.list_geotagged_assets(db_path, limit=24)
-    if not rows:
-        recent_assets = manifest.list_assets(db_path, limit=12)
-        fallback_dots = []
-        for index, row in enumerate(recent_assets):
-            asset_id = str(row.get("id") or "")
-            if len(asset_id) < 16:
-                continue
-            x_seed = int(asset_id[:8], 16) / 0xFFFFFFFF
-            y_seed = int(asset_id[8:16], 16) / 0xFFFFFFFF
-            cx = 10 + (x_seed * 80)
-            cy = 10 + (y_seed * 80)
-            opacity = max(0.18, 0.72 - (index * 0.04))
-            fallback_dots.append(
-                f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{max(1.6, 3.2 - index * 0.06):.2f}" fill="rgba(255,255,255,{opacity:.2f})" />'
-            )
+def _carousel_dots(count: int) -> str:
+    if count <= 1:
+        return ""
+    return f"""
+    <div class="carousel-dots" aria-label="Carousel position">
+      {''.join(f'<button class="carousel-dot" type="button" data-carousel-dot aria-label="Show item {index + 1}"></button>' for index in range(count))}
+    </div>
+    """
+
+
+def _month_day_label(month_day: str) -> str:
+    try:
+        return datetime.strptime(f"2000-{month_day}", "%Y-%m-%d").strftime("%B %d")
+    except ValueError:
+        return month_day
+
+
+def _render_home_recent_panel(recent_assets: list[dict]) -> str:
+    if not recent_assets:
         return """
-        <div class="home-map" aria-label="Location map">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="mapGlow" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stop-color="#0a84ff" stop-opacity=".16" />
-                <stop offset="100%" stop-color="#ffffff" stop-opacity=".04" />
-              </linearGradient>
-            </defs>
-            <rect x="0" y="0" width="100" height="100" fill="url(#mapGlow)"/>
-            <g stroke="rgba(255,255,255,.10)" stroke-width=".35">
-              {''.join(f'<line x1="{x}" y1="0" x2="{x}" y2="100" />' for x in (20, 40, 60, 80))}
-              {''.join(f'<line x1="0" y1="{y}" x2="100" y2="{y}" />' for y in (20, 40, 60, 80))}
-            </g>
-            <g fill="none" stroke="rgba(255,255,255,.14)" stroke-width=".7">
-              <path d="M10,24 C18,20 24,18 32,19 C38,20 44,18 51,20 C57,22 63,24 70,23 C76,22 82,20 90,22" />
-              <path d="M12,64 C18,61 24,59 30,60 C37,61 44,58 49,57 C56,56 62,58 68,60 C76,62 82,64 89,63" />
-              <path d="M18,82 C22,79 28,77 34,78 C41,79 47,77 53,76 C60,75 67,77 73,79 C79,81 84,83 88,82" />
-            </g>
-            <g>
-              {{DOTS}}
-            </g>
-          </svg>
+        <div class="home-carousel" aria-label="Recent media gallery">
+          <div class="home-carousel-head">
+            <div class="home-carousel-title">
+              <strong>Recent</strong>
+              <span>Latest items in the archive</span>
+            </div>
+          </div>
+          <div class="on-this-day-empty">No recent items yet.</div>
         </div>
-        """.replace("{{DOTS}}", "".join(fallback_dots))
-    dots = []
-    for index, row in enumerate(rows):
-        lat = float(row.get("gps_lat") or 0)
-        lon = float(row.get("gps_lon") or 0)
-        x, y = _mercator_point(lat, lon)
-        cx = 10 + (x * 80)
-        cy = 10 + (y * 80)
-        opacity = max(0.28, 0.96 - (index * 0.03))
-        dots.append(
-            f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{max(1.8, 3.4 - index * 0.05):.2f}" fill="rgba(255,255,255,{opacity:.2f})" />'
+        """
+    tiles = []
+    for index, row in enumerate(recent_assets[:10]):
+        asset_id = str(row["id"])
+        filename = str(row.get("orig_filename") or asset_id)
+        tiles.append(
+            f"""
+            <a class="recent-tile{' is-active' if index == 0 else ''}" href="/app/assets/{escape(asset_id)}" title="{escape(filename)}" data-carousel-slide>
+              {_home_carousel_media_html(row, "recent-thumb")}
+              <span class="recent-badge">{escape(str(index + 1))}</span>
+            </a>
+            """
         )
     return f"""
-    <div class="home-map" aria-label="Location map">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="mapGlow" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#0a84ff" stop-opacity=".18" />
-              <stop offset="100%" stop-color="#ffffff" stop-opacity=".06" />
-            </linearGradient>
-          </defs>
-          <rect x="0" y="0" width="100" height="100" fill="url(#mapGlow)"/>
-          <g stroke="rgba(255,255,255,.12)" stroke-width=".4">
-            {''.join(f'<line x1="{x}" y1="0" x2="{x}" y2="100" />' for x in (20, 40, 60, 80))}
-            {''.join(f'<line x1="0" y1="{y}" x2="100" y2="{y}" />' for y in (20, 40, 60, 80))}
-          </g>
-          <g fill="none" stroke="rgba(255,255,255,.16)" stroke-width=".7">
-            <path d="M10,24 C18,20 24,18 32,19 C38,20 44,18 51,20 C57,22 63,24 70,23 C76,22 82,20 90,22" />
-            <path d="M12,64 C18,61 24,59 30,60 C37,61 44,58 49,57 C56,56 62,58 68,60 C76,62 82,64 89,63" />
-            <path d="M18,82 C22,79 28,77 34,78 C41,79 47,77 53,76 C60,75 67,77 73,79 C79,81 84,83 88,82" />
-          </g>
-          <g>
-            {''.join(dots)}
-          </g>
-      </svg>
+    <div class="home-carousel" aria-label="Recent media gallery" data-home-carousel="true" data-interval="5200">
+      <div class="home-carousel-head">
+        <div class="home-carousel-title">
+          <strong>Recent</strong>
+          <span>Latest items in the archive</span>
+        </div>
+        {_carousel_dots(len(tiles))}
+      </div>
+      <div class="carousel-stage">
+        {''.join(tiles)}
+      </div>
+    </div>
+    """
+
+
+def _render_home_on_this_day_panel(db_path: Path) -> str:
+    today = datetime.now()
+    month_day = today.strftime("%m-%d")
+    groups = manifest.list_on_this_day_groups(db_path, preferred_month_day=month_day, limit=12)
+    if not groups:
+        return f"""
+        <div class="on-this-day">
+          <div class="on-this-day-head">
+            <div class="on-this-day-title">
+              <strong>On This Day</strong>
+              <span>{today.strftime("%B %d")}</span>
+            </div>
+          </div>
+          <div class="on-this-day-empty">No matching photos yet for {today.strftime("%B %d")}.</div>
+        </div>
+        """
+    tiles = []
+    for group in groups:
+        group_month_day = str(group.get("month_day") or "")
+        if not group_month_day:
+            continue
+        group_label = f"{_month_day_label(group_month_day)} across the years"
+        rows = manifest.list_assets_on_this_day(db_path, limit=None, month_day=group_month_day)
+        for row in rows:
+            asset_id = str(row["id"])
+            filename = str(row.get("orig_filename") or asset_id)
+            dt_value = str(row.get("dt_original") or "")
+            year = dt_value[:4] if len(dt_value) >= 4 else "----"
+            index = len(tiles)
+            tiles.append(
+                f"""
+                <a class="on-this-day-tile{' is-active' if index == 0 else ''}" href="/app/assets/{escape(asset_id)}" title="{escape(filename)}" data-carousel-slide data-carousel-group="{escape(group_month_day)}" data-carousel-group-label="{escape(group_label)}">
+                  {_home_carousel_media_html(row, "on-this-day-thumb")}
+                  <span class="on-this-day-badge">{escape(year)}</span>
+                </a>
+                """
+            )
+    if not tiles:
+        return f"""
+        <div class="on-this-day">
+          <div class="on-this-day-head">
+            <div class="on-this-day-title">
+              <strong>On This Day</strong>
+              <span>{today.strftime("%B %d")}</span>
+            </div>
+          </div>
+          <div class="on-this-day-empty">No matching photos yet for {today.strftime("%B %d")}.</div>
+        </div>
+        """
+    first_label = str(groups[0].get("month_day") or month_day)
+    return f"""
+    <div class="on-this-day" aria-label="On this day memories" data-home-carousel="true" data-interval="6200">
+      <div class="on-this-day-head">
+        <div class="on-this-day-title">
+          <strong>On This Day</strong>
+          <span data-carousel-subtitle>{_month_day_label(first_label)} across the years</span>
+        </div>
+      </div>
+      <div class="carousel-stage">
+        {''.join(tiles)}
+      </div>
     </div>
     """
 
@@ -2275,7 +2619,7 @@ def _review_sequence_score_label(group: dict) -> str:
     group_type = str(group.get("group_type") or "")
     if group_type == "EXACT_SHA256":
         return "100% duplicate"
-    return f"{int(round(float(group.get('match_score_pct') or 0)))}% near duplicate"
+    return f"{int(round(float(group.get('match_score_pct') or 0)))}%"
 
 
 def _friendly_job_label(job_type: str) -> str:
@@ -2311,7 +2655,7 @@ def _job_summary(job_type: str) -> str:
         "audit": "Summarize what looks good and what still needs work.",
         "validate_library": "Check that library files are present.",
     }
-    return hints.get(job_type, "Background task for Photo Unifier.")
+    return hints.get(job_type, "Background task for Literoom.")
 
 
 def _group_assets(items: list[dict]) -> list[tuple[str, list[dict]]]:
@@ -2526,6 +2870,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         metadata_overview = manifest.get_metadata_overview(db_path)
         import_progress = manifest.get_import_progress(db_path)
         face_overview = manifest.get_face_overview(db_path)
+        live_progress = _live_progress_snapshot(db_path).get("live_progress", {})
         recent_assets = []
         for row in manifest.list_assets(db_path, limit=120, sort="recent"):
             if row.get("managed_path"):
@@ -2535,11 +2880,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         if not recent_assets:
             recent_assets = manifest.list_assets(db_path, limit=20, sort="recent")
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
+        live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
         body = f"""
         <section class="hero-card">
             <section class="hero-panel hero-copy">
-            <span class="badge">Photo library</span>
-            <h1>Everything, in one calm place.</h1>
+            <div class="quote-stack">
+              <h1>We keep this love in a photograph</h1>
+              <div class="quote-source">Ed Sheeran</div>
+            </div>
             <p>Browse the archive, jump into people, review cleanup queues, and keep the system healthy without feeling like you are in settings.</p>
             <div class="button-row">
               <a href="/app/assets"><button class="btn" type="button">Open Library</button></a>
@@ -2548,7 +2896,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               <a href="/app/system"><button class="btn secondary" type="button">System</button></a>
             </div>
           </section>
-          <section class="hero-panel hero-people-panel">
+          <section class="hero-people-panel">
             {_render_home_people_panel(db_path)}
           </section>
         </section>
@@ -2559,10 +2907,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <div class="summary-big">{overview.get('assets_total', 0)}</div>
             <div class="summary-copy">items ready to browse</div>
           </section>
-          <section class="summary-card">
+          <section class="summary-card" data-live-progress-widget>
             <h2>Imports</h2>
-            <div class="summary-big">{import_progress.get('completion_pct', 0)}%</div>
-            <div class="summary-copy">{import_progress.get('ready_assets', 0)} of {import_progress.get('total_assets', 0)} fully through the pipeline</div>
+            <div class="summary-big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
+            <div class="summary-copy" data-live-progress-copy>{import_progress.get('ready_assets', 0)} of {import_progress.get('total_assets', 0)} fully through the pipeline</div>
+            <div class="progress-shell">
+              <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
+              <div class="asset-meta" data-live-progress-detail{live_detail_attr}>{escape(str(live_progress.get('detail') or ''))}</div>
+            </div>
           </section>
           <section class="summary-card">
             <h2>People</h2>
@@ -2577,7 +2929,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         </section>
         <section class="home-panels">
           {_render_home_recent_panel(recent_assets)}
-          {_render_home_map_panel(db_path)}
+          {_render_home_on_this_day_panel(db_path)}
         </section>
         """
         return _page("Photos", body, history_html=_history_sidebar_html(db_path), body_class="home-page")
@@ -2654,7 +3006,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         <div class="toolbar">
           <div class="title">
             <h1>People</h1>
-            <p>Open a person to browse confirmed photos and merge strong related clusters.</p>
           </div>
         </div>
             """,
@@ -2973,7 +3324,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <div class="review-section-head">
               <div>
                 <h2>Exact duplicates</h2>
-                <p>These are 100% hash matches. Keep one and remove the rest.</p>
               </div>
               <div class="review-section-head-actions">
                 <a href="{exact_delete_all_link}"><button class="btn secondary" type="button">Delete all</button></a>
@@ -2988,7 +3338,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <div class="review-section-head">
               <div>
                 <h2>Near duplicates</h2>
-                <p>These are the ambiguous Snapchat-style clips and near matches.</p>
               </div>
               <div class="review-section-head-actions">
                 <a href="{sequence_delete_all_link}"><button class="btn secondary" type="button">Delete all</button></a>
@@ -3059,14 +3408,30 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         """
         return _page("Review", body, history_html=_history_sidebar_html(db_path), body_class=body_class)
 
-    def _render_system_page(current_config: AppConfig, db_path: Path, resolved: Path, message: Optional[str] = None) -> str:
+    def _render_system_page(
+        current_config: AppConfig,
+        db_path: Path,
+        resolved: Path,
+        message: Optional[str] = None,
+        *,
+        page_title: str = "System",
+        page_heading: str = "System",
+    ) -> str:
         overview = manifest.get_overview(db_path)
         metadata_overview = manifest.get_metadata_overview(db_path)
         import_progress = manifest.get_import_progress(db_path)
+        live_progress = _live_progress_snapshot(db_path).get("live_progress", {})
         jobs = manifest.list_jobs(db_path, limit=6)
         tool_stack = build_tool_stack_report(current_config.tools)
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         sources_text = "\n".join(current_config.sources)
+        live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
+        workspace_root_value = str(current_config.resolve_root(resolved))
+        import_dir_value = str((Path(workspace_root_value) / "imports").resolve())
+        library_dir_value = str(current_config.managed_library_dir(resolved))
+        previews_dir_value = str(current_config.previews_dir(resolved))
+        logs_dir_value = str(current_config.logs_dir(resolved))
+        temp_dir_value = str(current_config.temp_dir(resolved))
         stack_groups_html = "".join(
             f"""
             <section class="stack-group">
@@ -3084,14 +3449,24 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         body = f"""
         <div class="toolbar">
           <div class="title">
-            <h1>System</h1>
-            <p>Settings, metadata, health, and imports in one place.</p>
+            <h1>{escape(page_heading)}</h1>
+          </div>
+          <div class="button-row">
+            <a class="btn secondary" href="/app/actions/run-now">Run ingest now</a>
           </div>
         </div>
         {flash}
         <section class="system-stack">
           <section class="system-top">
-            <section class="system-card"><h3>Imports</h3><div class="big">{import_progress.get('completion_pct', 0)}%</div><div class="asset-meta">{import_progress.get('ready_assets', 0)} ready</div></section>
+            <section class="system-card" data-live-progress-widget>
+              <h3>Imports</h3>
+              <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
+              <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
+              <div class="progress-shell" style="margin-top:12px;">
+              <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
+                <div class="asset-meta" data-live-progress-detail{live_detail_attr}>{escape(str(live_progress.get('detail') or ''))}</div>
+              </div>
+            </section>
             <section class="system-card"><h3>Coverage</h3><div class="big">{metadata_overview.get('average_metadata_score', 0)}</div><div class="asset-meta">average metadata coverage</div></section>
             <section class="system-card"><h3>Library</h3><div class="big">{overview.get('assets_total', 0)}</div><div class="asset-meta">items in the archive</div></section>
           </section>
@@ -3103,7 +3478,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <section class="card section">
             <div class="section-header">
               <h2>Stack</h2>
-              <p>Locked Photo Unifier tools and engines.</p>
+              <p>Locked Literoom tools and engines.</p>
             </div>
             <div class="stack-groups">
               {stack_groups_html or "<div class='muted'>No stack info available.</div>"}
@@ -3111,23 +3486,37 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </section>
           <section class="card section">
             <div class="section-header">
-              <h2>Settings</h2>
-              <p>Pick the folder where new photos and videos arrive.</p>
+              <h2>Workspace</h2>
+              <p>Choose where imports land and where Literoom builds the library tree.</p>
             </div>
-            <form method="get" action="/app/settings/save" id="settings-form">
-              <input type="hidden" name="workspace_root" value="{escape(current_config.workspace_root)}">
+            <form method="get" action="/app/settings/save" id="settings-form" data-auto-submit="true">
+              <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(current_config.workspace_root)}">
               <input type="hidden" name="sources_text" id="sources_text" value="{escape(sources_text)}">
-              <label class="field" style="grid-column:1 / -1;">
+              <input type="hidden" name="db_path_value" value="{escape(current_config.paths.db_path)}">
+              <input type="hidden" name="library_dir_value" id="library_dir_value" value="{escape(current_config.paths.managed_library_dir)}">
+              <input type="hidden" name="previews_dir_value" id="previews_dir_value" value="{escape(current_config.paths.derivatives_dir)}">
+              <input type="hidden" name="logs_dir_value" value="{escape(current_config.paths.logs_dir)}">
+              <input type="hidden" name="temp_dir_value" value="{escape(current_config.paths.temp_dir)}">
+              <label class="field" style="grid-column:1 / -1; margin-bottom:24px;">
                 <span>Import folder</span>
                 <div class="import-picker">
                   <div class="button-row">
                     <button class="btn secondary" type="button" id="choose-import-folder">Choose import folder…</button>
                   </div>
-                  <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(sources_text or str(Path(current_config.workspace_root) / 'imports'))}</div>
+                  <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(sources_text or import_dir_value)}</div>
                   <input type="file" id="import-folder-picker" style="display:none;" webkitdirectory directory multiple>
                 </div>
               </label>
-              <div class="button-row" style="margin-top: 14px;"><button class="btn" type="submit">Save</button></div>
+              <label class="field" style="grid-column:1 / -1; margin-top:8px;">
+                <span>Library folder</span>
+                <div class="import-picker">
+                  <div class="button-row">
+                    <button class="btn secondary" type="button" id="choose-library-folder">Choose library folder…</button>
+                  </div>
+                  <div class="asset-meta" id="chosen-library-folder" style="font-size:.92rem;">{escape(library_dir_value)}</div>
+                  <input type="file" id="library-folder-picker" style="display:none;" webkitdirectory directory multiple>
+                </div>
+              </label>
             </form>
           </section>
           <section class="card section">
@@ -3145,12 +3534,31 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         body += """
         <script>
           (function() {
+            const workspaceRoot = document.getElementById('workspace-root-input');
             const chooser = document.getElementById('choose-import-folder');
             const picker = document.getElementById('import-folder-picker');
+            const libraryChooser = document.getElementById('choose-library-folder');
+            const libraryPicker = document.getElementById('library-folder-picker');
             const field = document.getElementById('sources_text');
             const label = document.getElementById('chosen-import-folder');
+            const libraryField = document.getElementById('library_dir_value');
+            const libraryLabel = document.getElementById('chosen-library-folder');
             const form = document.getElementById('settings-form');
-            if (!chooser || !picker || !field || !label || !form) return;
+            if (!chooser || !picker || !libraryChooser || !libraryPicker || !field || !label || !libraryField || !libraryLabel || !form) return;
+            const prettyPath = (folderName) => {
+              const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\/+$/, '');
+              const clean = String(folderName || '').replace(/^\/+/, '');
+              if (!clean) return root;
+              if (!root) return clean;
+              return `${root}/${clean}`;
+            };
+            if (workspaceRoot) {
+              workspaceRoot.addEventListener('change', function() {
+                label.textContent = prettyPath(field.value || 'imports');
+                libraryLabel.textContent = prettyPath(libraryField.value || 'library');
+                form.requestSubmit();
+              });
+            }
             chooser.addEventListener('click', function() {
               picker.click();
             });
@@ -3164,21 +3572,42 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               const selected = roots[0] || '';
               if (!selected) return;
               field.value = selected;
-              label.textContent = selected;
+              label.textContent = prettyPath(selected);
+              form.submit();
+            });
+            libraryChooser.addEventListener('click', function() {
+              libraryPicker.click();
+            });
+            libraryPicker.addEventListener('change', function() {
+              const files = Array.from(libraryPicker.files || []);
+              if (!files.length) return;
+              const roots = Array.from(new Set(files.map(file => {
+                const rel = file.webkitRelativePath || file.name || '';
+                return rel.split('/')[0];
+              }).filter(Boolean)));
+              const selected = roots[0] || '';
+              if (!selected) return;
+              libraryField.value = selected;
+              libraryLabel.textContent = prettyPath(selected);
               form.submit();
             });
           })();
         </script>
         """
-        return _page("System", body, history_html=_history_sidebar_html(db_path))
+        return _page(page_title, body, history_html=_history_sidebar_html(db_path))
 
-    def _run_full_pipeline_background(batch_limit: Optional[int] = None):
+    def _run_ingest_background():
         if not auto_sync_lock.acquire(blocking=False):
             return
         auto_sync_state["running"] = True
         auto_sync_state["last_error"] = None
         try:
-            result = run_full_pipeline(config_path, batch_limit=batch_limit)
+            current_config, resolved, _db_path, _managed = _current_config()
+            result = run_ingest(
+                config_path,
+                source_tag="manual",
+                sources=current_config.resolved_sources(resolved),
+            )
             auto_sync_state["last_result"] = result
             auto_sync_state["last_run_at"] = datetime.utcnow().isoformat(timespec="seconds")
         except Exception as exc:  # pragma: no cover
@@ -3189,37 +3618,21 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             auto_sync_lock.release()
 
     def _start_background(action_name: str):
-        current_config, _resolved, _db_path, _managed = _current_config()
-        safe_batch_limit = max(25, min(int(current_config.pipeline.batch_size or 500), 1000))
+        current_config, resolved, _db_path, _managed = _current_config()
         action_map = {
-            "run-now": lambda: _run_full_pipeline_background(batch_limit=safe_batch_limit),
-            "detect-faces": lambda: run_face_detection(config_path, limit=safe_batch_limit, force=True),
+            "run-now": lambda: _run_ingest_background(),
+            "detect-faces": lambda: run_face_detection(config_path, limit=max(25, min(int(current_config.pipeline.batch_size or 500), 1000)), force=True),
             "toggle-auto": None,
         }
         if action_name not in action_map:
             raise HTTPException(status_code=404, detail="Unknown action")
         if action_name == "toggle-auto":
             return
+        if action_name == "run-now" and not current_config.resolved_sources(resolved):
+            raise ValueError("No ingest sources configured.")
         worker = threading.Thread(target=action_map[action_name], daemon=True)
         worker.start()
-
-    def _auto_sync_loop():
-        while True:
-            try:
-                current_config, _resolved, _db_path, _managed = _current_config()
-                if current_config.pipeline.auto_sync_enabled and not auto_sync_state["running"]:
-                    safe_batch_limit = max(25, min(int(current_config.pipeline.batch_size or 500), 1000))
-                    _run_full_pipeline_background(batch_limit=safe_batch_limit)
-                interval = max(30, int(current_config.pipeline.auto_sync_interval_seconds))
-            except Exception as exc:  # pragma: no cover
-                auto_sync_state["last_error"] = str(exc)
-                interval = 60
-            time.sleep(interval)
-
-    initial_config, _resolved, _db_path, _managed = _current_config()
-    if initial_config.pipeline.auto_sync_enabled:
-        threading.Thread(target=_auto_sync_loop, daemon=True).start()
-    app = FastAPI(title="Photo Unifier", version="0.4.0")
+    app = FastAPI(title="Literoom", version="0.4.0")
 
     @app.get("/healthz")
     def healthz():
@@ -3231,6 +3644,24 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             "tools": tool_stack,
         }
 
+    @app.get("/logo.png")
+    def logo_png():
+        if not LOGO_PATH.exists():
+            raise HTTPException(status_code=404, detail="Logo not found")
+        return FileResponse(LOGO_PATH, media_type="image/png")
+
+    @app.get("/favicon.png")
+    def favicon_png():
+        if not FAVICON_PATH.exists():
+            return logo_png()
+        return FileResponse(FAVICON_PATH, media_type="image/png")
+
+    @app.get("/favicon.ico")
+    def favicon_ico():
+        if not FAVICON_PATH.exists():
+            return logo_png()
+        return FileResponse(FAVICON_PATH, media_type="image/png")
+
     @app.get("/status")
     def status():
         _config, _resolved, db_path, _managed = _current_config()
@@ -3241,6 +3672,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             "pipeline": manifest.get_pipeline_health(db_path),
             "tools": tool_stack,
         }
+
+    @app.get("/progress")
+    def progress():
+        _config, _resolved, db_path, _managed = _current_config()
+        return _live_progress_snapshot(db_path)
 
     @app.get("/jobs")
     def jobs(limit: int = Query(default=20, ge=1, le=200)):
@@ -3572,7 +4008,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             _start_background(action_name)
         except ValueError as exc:
             return RedirectResponse(url=f"/?message={escape(str(exc)).replace(' ', '+')}", status_code=303)
-        message = "Started+safe+batch+library+run"
+        message = "Started+ingest+run"
         if action_name == "detect-faces":
             message = "Started+face+detection+batch+refresh"
         return RedirectResponse(url=f"/?message={message}", status_code=303)
@@ -3594,10 +4030,12 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         workspace_root: str,
         sources_text: str = "",
         db_path_value: str = "",
-        managed_library_dir_value: str = "",
-        derivatives_dir_value: str = "",
+        library_dir_value: str = "",
+        previews_dir_value: str = "",
         logs_dir_value: str = "",
         temp_dir_value: str = "",
+        managed_library_dir_value: str = "",
+        derivatives_dir_value: str = "",
         batch_size: int = 500,
         image_thumbnail_size: int = 512,
         video_preview_offset_seconds: int = 1,
@@ -3608,13 +4046,15 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     ):
         current_config, _resolved, _db_path, _managed = _current_config()
         sources = [line.strip() for line in sources_text.splitlines() if line.strip()]
+        library_dir = library_dir_value.strip() or managed_library_dir_value.strip() or current_config.paths.managed_library_dir
+        previews_dir = previews_dir_value.strip() or derivatives_dir_value.strip() or current_config.paths.derivatives_dir
         updated = AppConfig(
             workspace_root=workspace_root.strip() or ".",
             sources=sources,
             paths=current_config.paths.__class__(
                 db_path=db_path_value.strip() or current_config.paths.db_path,
-                managed_library_dir=managed_library_dir_value.strip() or current_config.paths.managed_library_dir,
-                derivatives_dir=derivatives_dir_value.strip() or current_config.paths.derivatives_dir,
+                managed_library_dir=library_dir,
+                derivatives_dir=previews_dir,
                 logs_dir=logs_dir_value.strip() or current_config.paths.logs_dir,
                 temp_dir=temp_dir_value.strip() or current_config.paths.temp_dir,
             ),
@@ -3631,7 +4071,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 image_thumbnail_size=image_thumbnail_size,
                 video_preview_offset_seconds=video_preview_offset_seconds,
                 managed_naming=managed_naming.strip() or current_config.pipeline.managed_naming,
-                auto_sync_enabled=current_config.pipeline.auto_sync_enabled,
+                auto_sync_enabled=False,
                 auto_sync_interval_seconds=max(30, auto_sync_interval_seconds),
             ),
             thresholds=current_config.thresholds,
@@ -3651,7 +4091,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
 
     @app.get("/app/settings", response_class=HTMLResponse)
     def settings_page():
-        return RedirectResponse(url="/app/system", status_code=303)
+        current_config, resolved, db_path, _managed = _current_config()
+        return _render_system_page(
+            current_config,
+            db_path,
+            resolved,
+            page_title="Settings",
+            page_heading="Settings",
+        )
 
     @app.get("/app/jobs", response_class=HTMLResponse)
     def jobs_page():
@@ -3684,6 +4131,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         per_page: int = 100,
         sort: str = "recent",
         media_type: Optional[str] = None,
+        source: Optional[str] = None,
         review_state: Optional[str] = None,
         favorite_only: int = 0,
         partial: int = 0,
@@ -3703,6 +4151,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 offset=(page - 1) * per_page,
                 include_hidden=True,
                 media_type=media_type or None,
+                source=source or None,
             )
             items = list(search_data.get("items", []))
             total_count = int(search_data.get("count", len(items)))
@@ -3716,6 +4165,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     offset=(page - 1) * per_page,
                     include_hidden=True,
                     media_type=media_type or None,
+                    source=source or None,
                 )
                 items = list(search_data.get("items", []))
                 total_count = int(search_data.get("count", len(items)))
@@ -3726,6 +4176,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 query=None,
                 include_hidden=True,
                 media_type=media_type or None,
+                source=source or None,
                 favorite_only=bool(favorite_only),
             )
             total_pages = max(1, (total_count + per_page - 1) // per_page) if total_count else 1
@@ -3739,6 +4190,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 include_hidden=True,
                 sort=sort,
                 media_type=media_type or None,
+                source=source or None,
                 review_state=review_state or None,
                 favorite_only=bool(favorite_only),
             )
@@ -3746,8 +4198,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             total_pages = max(1, (total_count + per_page - 1) // per_page) if total_count else 1
             offset = (page - 1) * per_page
         known_people = [row["label"] for row in manifest.list_face_identities(db_path, limit=200, status="CONFIRMED")]
+        asset_sources = manifest.list_asset_sources(db_path)
         if media_type:
             items = [row for row in items if row.get("media_type") == media_type]
+        if source:
+            items = [row for row in items if row.get("source") == source]
         if not q and sort == "rated":
             items = sorted(items, key=lambda row: (row.get("user_rating") or 0, row.get("score") or 0), reverse=True)
         elif not q and sort == "recent":
@@ -3791,6 +4246,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 params.append(f"sort={quote_plus(str(sort))}")
             if media_type:
                 params.append(f"media_type={quote_plus(str(media_type))}")
+            if source:
+                params.append(f"source={quote_plus(str(source))}")
             if review_state:
                 params.append(f"review_state={quote_plus(str(review_state))}")
             if favorite_only:
@@ -3807,11 +4264,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             recent="selected" if sort == "recent" else "",
             rated="selected" if sort == "rated" else "",
         )
-        summary_text = (
-            f"Showing {start_item:,}-{end_item:,} of {total_count:,}"
-            if total_count
-            else "No items found"
-        )
         load_more_label = "Scroll to load more" if has_next else "All assets loaded"
         chunk_html = "".join(grids) or "<section class='card muted'>No assets found.</section>"
         if partial_mode:
@@ -3821,12 +4273,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             f'<button class="library-name-chip" type="button" data-library-name="{escape(str(name))}">{escape(str(name))}</button>'
             for name in known_people[:16]
         )
+        source_options = "".join(
+            f'<option value="{escape(str(row["source"]))}" {"selected" if str(source or "") == str(row["source"]) else ""}>{escape(str(row["source"]))} ({int(row.get("asset_count") or 0):,})</option>'
+            for row in asset_sources
+        )
         body = f"""
         <div class="toolbar">
           <div class="title">
             <h1>Library</h1>
-            <p>Your archive in a gallery-first view, grouped by month like a photo library.</p>
-            <div class="status-pill">{escape(summary_text)}</div>
           </div>
           <div class="button-row">
             <button class="btn secondary library-select-fab" type="button" id="library-select-mode-toggle">Select</button>
@@ -3848,6 +4302,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         <form class="searchbar" method="get" action="/app/assets" data-auto-submit="true">
           <input type="search" name="q" placeholder="Search by dog, receipt, London Bridge, people, or places" value="{escape(q or '')}">
           <input type="hidden" name="per_page" value="{per_page}">
+          <select name="source" style="border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px 14px;font:inherit;">
+            <option value="">All Sources</option>
+            {source_options}
+          </select>
           <select name="media_type" style="border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px 14px;font:inherit;">
             <option value="">All Media</option>
             <option value="image" {"selected" if media_type == "image" else ""}>Images</option>

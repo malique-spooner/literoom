@@ -20,8 +20,8 @@ def export_built_assets(
     destination_dir = Path(destination_dir)
     destination_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest_path = destination_dir / "photo-unifier-export.jsonl"
-    summary_path = destination_dir / "photo-unifier-export-summary.json"
+    manifest_path = destination_dir / "literoom-export.jsonl"
+    summary_path = destination_dir / "literoom-export-summary.json"
     started_at = manifest.utcnow_iso()
 
     counts = {

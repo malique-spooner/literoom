@@ -101,6 +101,7 @@ def run_build_library(
             source_roots=config.resolved_sources(resolved),
             force=force,
             limit=limit,
+            job_id=job_id,
         )
         return _complete_job(db_path, job_id, "build_library", {"job_id": job_id, "processed_assets": count, "force": force})
     except Exception as exc:

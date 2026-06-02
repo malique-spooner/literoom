@@ -898,6 +898,27 @@ def iter_for_master(db_path: Path, limit: int | None = None) -> Iterator[Dict[st
         con.close()
 
 
+def count_for_master(db_path: Path, limit: int | None = None) -> int:
+    _ensure_columns(db_path)
+    con = connect(db_path)
+    try:
+        sql = """
+            SELECT COUNT(*)
+            FROM assets a
+            JOIN managed_assets m ON m.asset_id = a.id
+            WHERE a.target_relpath IS NOT NULL
+              AND a.target_filename IS NOT NULL
+              AND (m.status = 'PLANNED' OR m.status = 'FAILED' OR a.status = 'NEW')
+        """
+        params: List[Any] = []
+        if limit:
+            sql = f"SELECT COUNT(*) FROM ({sql} LIMIT ?) AS counted"
+            params.append(int(limit))
+        return int(con.execute(sql, params).fetchone()[0])
+    finally:
+        con.close()
+
+
 def mark_embedded(
     db_path: Path,
     asset_id: str,
@@ -2414,6 +2435,7 @@ def list_assets(
     include_hidden: bool = False,
     sort: str = "recent",
     media_type: Optional[str] = None,
+    source: Optional[str] = None,
     review_state: Optional[str] = None,
     favorite_only: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -2442,6 +2464,7 @@ def list_assets(
             query=query,
             include_hidden=include_hidden,
             media_type=media_type,
+            source=source,
             review_state=review_state,
             favorite_only=favorite_only,
         )
@@ -2456,11 +2479,87 @@ def list_assets(
         con.close()
 
 
+def list_assets_on_this_day(
+    db_path: Path,
+    *,
+    limit: Optional[int] = 12,
+    month_day: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        month_day = month_day or datetime.now().strftime("%m-%d")
+        sql = """
+            SELECT a.id, a.source, a.source_kind, a.media_type, a.orig_filename, a.dt_original,
+                   a.status, a.target_relpath, a.target_filename, m.status AS managed_status,
+                   m.managed_path
+            FROM assets a
+            LEFT JOIN managed_assets m ON m.asset_id = a.id
+            WHERE a.dt_original IS NOT NULL
+              AND substr(a.dt_original, 6, 5) = ?
+            ORDER BY a.dt_original DESC, a.id DESC
+            """
+        params: list[Any] = [month_day]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = con.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_on_this_day_groups(
+    db_path: Path,
+    *,
+    preferred_month_day: Optional[str] = None,
+    limit: Optional[int] = 12,
+) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        preferred_month_day = preferred_month_day or datetime.now().strftime("%m-%d")
+        rows = con.execute(
+            """
+            SELECT substr(a.dt_original, 6, 5) AS month_day,
+                   COUNT(*) AS asset_count,
+                   MAX(a.dt_original) AS latest_dt
+            FROM assets a
+            WHERE a.dt_original IS NOT NULL
+              AND length(a.dt_original) >= 10
+            GROUP BY substr(a.dt_original, 6, 5)
+            """,
+        ).fetchall()
+        groups = [dict(row) for row in rows]
+
+        def day_number(value: str) -> int:
+            try:
+                parsed = datetime.strptime(f"2000-{value}", "%Y-%m-%d").date()
+            except ValueError:
+                return 0
+            return parsed.timetuple().tm_yday
+
+        preferred_day = day_number(preferred_month_day)
+
+        def days_back(group: Dict[str, Any]) -> tuple[int, str]:
+            group_month_day = str(group.get("month_day") or "")
+            group_day = day_number(group_month_day)
+            if not group_day:
+                return (367, group_month_day)
+            return ((preferred_day - group_day) % 366, group_month_day)
+
+        groups.sort(key=days_back)
+        if limit is not None:
+            groups = groups[:limit]
+        return groups
+    finally:
+        con.close()
+
+
 def _asset_filter_sql(
     *,
     query: Optional[str] = None,
     include_hidden: bool = False,
     media_type: Optional[str] = None,
+    source: Optional[str] = None,
     review_state: Optional[str] = None,
     favorite_only: bool = False,
 ) -> tuple[str, List[Any]]:
@@ -2490,6 +2589,9 @@ def _asset_filter_sql(
     if media_type:
         clauses.append("a.media_type = ?")
         params.append(media_type)
+    if source:
+        clauses.append("a.source = ?")
+        params.append(source)
     if review_state:
         clauses.append("COALESCE(a.review_state, 'NEW') = ?")
         params.append(review_state)
@@ -2504,6 +2606,7 @@ def count_assets(
     query: Optional[str] = None,
     include_hidden: bool = False,
     media_type: Optional[str] = None,
+    source: Optional[str] = None,
     review_state: Optional[str] = None,
     favorite_only: bool = False,
 ) -> int:
@@ -2513,6 +2616,7 @@ def count_assets(
             query=query,
             include_hidden=include_hidden,
             media_type=media_type,
+            source=source,
             review_state=review_state,
             favorite_only=favorite_only,
         )
@@ -2521,6 +2625,23 @@ def count_assets(
             sql += " WHERE " + where_sql
         row = con.execute(sql, params).fetchone()
         return int(row[0] if row else 0)
+    finally:
+        con.close()
+
+
+def list_asset_sources(db_path: Path) -> List[Dict[str, Any]]:
+    con = connect(db_path)
+    try:
+        rows = con.execute(
+            """
+            SELECT COALESCE(NULLIF(TRIM(source), ''), 'unknown') AS source,
+                   COUNT(*) AS asset_count
+            FROM assets
+            GROUP BY COALESCE(NULLIF(TRIM(source), ''), 'unknown')
+            ORDER BY lower(source) ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
     finally:
         con.close()
 

@@ -12,6 +12,7 @@ _WEAK_TIMESTAMP_SOURCES = {
     "apple": {"file_mtime", "zip_mtime", "filename"},
     "google": {"filename", "zip_mtime", "file_mtime"},
     "snapchat": {"filename", "file_mtime", None},
+    "insta360": {"filename", "file_mtime", None},
 }
 
 
@@ -112,6 +113,16 @@ def _row_issues(row: dict[str, Any]) -> list[str]:
             "filename",
         }:
             issues.append(f"unexpected local timestamp source ({source_dt or 'missing'})")
+    elif source == "insta360":
+        if source_dt not in {
+            "insta360_proto",
+            "exif_datetime",
+            "datetimeoriginal",
+            "createdate",
+            "file_mtime",
+            "filename",
+        }:
+            issues.append(f"unexpected Insta360 timestamp source ({source_dt or 'missing'})")
     return issues
 
 
@@ -229,7 +240,7 @@ def build_audit_report(db_path: Path, *, sample_size: int = 100, sources: Option
 
 def format_audit_report(report: dict[str, Any]) -> str:
     lines: list[str] = []
-    lines.append("Photo Unifier audit")
+    lines.append("Literoom audit")
     lines.append(f"Database: {report['db_path']}")
     totals = report["totals"]
     lines.append(

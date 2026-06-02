@@ -13,6 +13,8 @@ from . import manifest
 from ..utils.exiftool import write_fields
 from ..utils.hashing import sha256_file
 
+SIDECAR_SUFFIX = ".literoom.json"
+
 
 def _json_list(val):
     if isinstance(val, str):
@@ -26,7 +28,7 @@ def _json_list(val):
 def _write_metadata_sidecar(db_path: Path, asset_id: str, dest: Path) -> None:
     payload = manifest.export_asset_metadata_payload(db_path, asset_id)
     payload["managed_file"] = str(dest)
-    sidecar_path = dest.with_suffix(dest.suffix + ".photo-unifier.json")
+    sidecar_path = dest.with_suffix(dest.suffix + SIDECAR_SUFFIX)
     sidecar_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     manifest.record_artifact(db_path, asset_id, "metadata_sidecar", str(sidecar_path), "READY")
 
@@ -125,10 +127,12 @@ def build(
     limit: int | None = None,
     set_fs_times: bool = True,
     log_every: int = 50,
+    job_id: Optional[str] = None,
 ) -> int:
     master_dir = Path(master_dir)
     master_dir.mkdir(parents=True, exist_ok=True)
 
+    total = manifest.count_for_master(db_path, limit=limit)
     count = copied = existed = embed_ok = embed_fail = 0
     source_index = _build_source_index(source_roots or [])
     for row in manifest.iter_for_master(db_path=db_path, limit=limit):
@@ -149,9 +153,24 @@ def build(
             try:
                 _write_metadata_sidecar(db_path, aid, dest)
             except Exception as exc:
-                manifest.record_artifact(db_path, aid, "metadata_sidecar", str(dest.with_suffix(dest.suffix + ".photo-unifier.json")), "FAILED", error=str(exc))
+                manifest.record_artifact(db_path, aid, "metadata_sidecar", str(dest.with_suffix(dest.suffix + SIDECAR_SUFFIX)), "FAILED", error=str(exc))
             existed += 1
             count += 1
+            if job_id and (count % 10 == 0 or count == total):
+                manifest.attach_job_metrics(
+                    db_path,
+                    job_id,
+                    {
+                        "stage": "build_library",
+                        "total_assets": total,
+                        "processed_assets": count,
+                        "remaining_assets": max(total - count, 0),
+                        "copied_assets": copied,
+                        "existing_assets": existed,
+                        "embedded_assets": embed_ok,
+                        "failed_assets": embed_fail,
+                    },
+                )
             continue
 
         try:
@@ -171,6 +190,21 @@ def build(
         except Exception as exc:
             manifest.update_status(db_path, aid, "ERROR", error=f"copy failed: {exc}")
             count += 1
+            if job_id and (count % 10 == 0 or count == total):
+                manifest.attach_job_metrics(
+                    db_path,
+                    job_id,
+                    {
+                        "stage": "build_library",
+                        "total_assets": total,
+                        "processed_assets": count,
+                        "remaining_assets": max(total - count, 0),
+                        "copied_assets": copied,
+                        "existing_assets": existed,
+                        "embedded_assets": embed_ok,
+                        "failed_assets": embed_fail,
+                    },
+                )
             continue
 
         dt = row.get("dt_original") or row.get("src_mtime")
@@ -197,12 +231,27 @@ def build(
                     db_path,
                     aid,
                     "metadata_sidecar",
-                    str(dest.with_suffix(dest.suffix + ".photo-unifier.json")),
+                    str(dest.with_suffix(dest.suffix + SIDECAR_SUFFIX)),
                     "FAILED",
                     error=str(sidecar_exc),
                 )
             embed_fail += 1
             count += 1
+            if job_id and (count % 10 == 0 or count == total):
+                manifest.attach_job_metrics(
+                    db_path,
+                    job_id,
+                    {
+                        "stage": "build_library",
+                        "total_assets": total,
+                        "processed_assets": count,
+                        "remaining_assets": max(total - count, 0),
+                        "copied_assets": copied,
+                        "existing_assets": existed,
+                        "embedded_assets": embed_ok,
+                        "failed_assets": embed_fail,
+                    },
+                )
             continue
 
         if ok:
@@ -223,15 +272,45 @@ def build(
                 db_path,
                 aid,
                 "metadata_sidecar",
-                str(dest.with_suffix(dest.suffix + ".photo-unifier.json")),
+                str(dest.with_suffix(dest.suffix + SIDECAR_SUFFIX)),
                 "FAILED",
                 error=str(exc),
             )
 
         count += 1
+        if job_id and (count % 10 == 0 or count == total):
+            manifest.attach_job_metrics(
+                db_path,
+                job_id,
+                {
+                    "stage": "build_library",
+                    "total_assets": total,
+                    "processed_assets": count,
+                    "remaining_assets": max(total - count, 0),
+                    "copied_assets": copied,
+                    "existing_assets": existed,
+                    "embedded_assets": embed_ok,
+                    "failed_assets": embed_fail,
+                },
+            )
         if count % log_every == 0:
             print(f"[build] {count}: processed {dest.name}")
 
+    if job_id:
+        manifest.attach_job_metrics(
+            db_path,
+            job_id,
+            {
+                "stage": "build_library",
+                "total_assets": total,
+                "processed_assets": count,
+                "remaining_assets": max(total - count, 0),
+                "copied_assets": copied,
+                "existing_assets": existed,
+                "embedded_assets": embed_ok,
+                "failed_assets": embed_fail,
+            },
+        )
     print(f"[build] Done. items={count} copied={copied} exist={existed} embed_ok={embed_ok} embed_fail={embed_fail}")
     return count
 

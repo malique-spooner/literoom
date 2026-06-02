@@ -420,6 +420,7 @@ def search_assets_semantic(
     offset: int = 0,
     include_hidden: bool = False,
     media_type: Optional[str] = None,
+    source: Optional[str] = None,
 ) -> Dict[str, Any]:
     q = (query or "").strip()
     q_tokens = set(_tokenize(q))
@@ -458,6 +459,8 @@ def search_assets_semantic(
             records = [row for row in records if not _is_hidden_asset(con, row["id"])]
         if media_type:
             records = [row for row in records if row.get("media_type") == media_type]
+        if source:
+            records = [row for row in records if row.get("source") == source]
         embedding_map = _prefetch_embeddings(con, {"asset_text", "asset_visual"})
         ref_text_vec: Optional[list[float]] = None
         ref_visual_vec: Optional[list[float]] = None
