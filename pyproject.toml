@@ -14,11 +14,8 @@ dependencies = [
     "pyyaml",
     "timezonefinder",
     "uvicorn",
-    "openai-whisper",
     "open_clip_torch",
-    "ultralytics",
     "insightface",
-    "paddleocr",
     "onnxruntime",
     "pi-heif",
 ]

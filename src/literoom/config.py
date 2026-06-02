@@ -34,7 +34,6 @@ class ToolPaths:
     ffmpeg: Optional[str] = None
     tesseract: Optional[str] = None
     vips: Optional[str] = None
-    whisper_model: Optional[str] = None
     clip_model: Optional[str] = None
     face_model: Optional[str] = None
 
@@ -133,11 +132,8 @@ class AppConfig:
         cache_dirs = {
             "XDG_CACHE_HOME": "root",
             "MPLCONFIGDIR": "matplotlib",
-            "PADDLE_PDX_CACHE_HOME": "paddlex",
             "HF_HOME": "huggingface",
-            "TORCH_HOME": "torch",
             "INSIGHTFACE_HOME": "insightface",
-            "YOLO_CONFIG_DIR": "ultralytics",
         }
         for candidate_root in (preferred_cache_root, fallback_cache_root):
             try:
@@ -276,7 +272,6 @@ def default_config() -> AppConfig:
             ffmpeg=tool_paths.get("ffmpeg"),
             tesseract=tool_paths.get("tesseract"),
             vips=tool_paths.get("libvips"),
-            whisper_model="base",
             clip_model="open_clip:ViT-B-32",
             face_model="antelopev2",
         )

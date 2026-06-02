@@ -169,8 +169,7 @@ def extract_content_cmd(config_path: Path, limit: Optional[int]):
         result = run_content_extraction(config_path, limit=limit)
         click.echo(
             f"Content extraction processed={result['processed']} ocr={result['ocr_saved']} "
-            f"transcripts={result['transcript_saved']} text_embeddings={result['text_saved']} "
-            f"visual_embeddings={result['visual_saved']}"
+            f"text_embeddings={result['text_saved']} visual_embeddings={result['visual_saved']}"
         )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc

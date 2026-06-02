@@ -62,6 +62,8 @@ Status: 100% complete.
 
 ## 8. Packaged validation
 
+Status: 100% complete.
+
 - run the packaged macOS app end to end on a clean machine or clean user profile
 - verify first launch, folder selection, ingest, review, and relaunch behavior from the bundle
 - fix any packaging-only issues that do not show up in the normal developer workflow

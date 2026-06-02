@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from functools import lru_cache
-from importlib import import_module
+from importlib.util import find_spec
 from pathlib import Path
 import shutil
 import sqlite3
@@ -30,13 +30,6 @@ LOCKED_STACK_GROUPS = (
         ),
     ),
     (
-        "Text",
-        (
-            {"name": "PaddleOCR", "kind": "python", "module": "paddleocr"},
-            {"name": "Whisper", "kind": "python", "module": "whisper", "model_field": "whisper_model"},
-        ),
-    ),
-    (
         "Faces",
         (
             {"name": "OpenCV", "kind": "python", "module": "cv2", "detail": "OpenCV image/video helpers"},
@@ -46,7 +39,6 @@ LOCKED_STACK_GROUPS = (
     (
         "Objects + meaning",
         (
-            {"name": "YOLO", "kind": "python", "module": "ultralytics"},
             {"name": "OpenCLIP", "kind": "python", "module": "open_clip", "model_field": "clip_model"},
         ),
     ),
@@ -60,12 +52,9 @@ LOCKED_STACK_GROUPS = (
 )
 
 OPTIONAL_PYTHON_TOOLS = {
-    "whisper": "whisper",
     "open_clip": "open_clip",
     "faiss": "faiss",
     "insightface": "insightface",
-    "ultralytics": "ultralytics",
-    "paddleocr": "paddleocr",
     "cv2": "cv2",
 }
 
@@ -91,7 +80,8 @@ def binary_tool_status(explicit_path: Optional[str], fallback_name: str) -> Dict
 @lru_cache(maxsize=None)
 def _import_status(module_name: str) -> tuple[bool, Optional[str]]:
     try:
-        import_module(module_name)
+        if find_spec(module_name) is None:
+            return False, f"No module named '{module_name}'"
         return True, None
     except Exception as exc:
         return False, str(exc)
@@ -215,18 +205,12 @@ def build_tool_stack_report(config_tools: Any) -> Dict[str, Any]:
         "ffmpeg": required["ffmpeg"],
         "tesseract": required["tesseract"],
         "libvips": optional["libvips"],
-        "PaddleOCR": locked_stack_index["PaddleOCR"],
-        "Whisper": locked_stack_index["Whisper"],
         "OpenCV": locked_stack_index["OpenCV"],
         "InsightFace": locked_stack_index["InsightFace"],
-        "YOLO": locked_stack_index["YOLO"],
         "OpenCLIP": locked_stack_index["OpenCLIP"],
         "SQLite FTS + vector search": locked_stack_index["SQLite FTS + vector search"],
-        "whisper": python_tools["whisper"],
         "open_clip": python_tools["open_clip"],
         "insightface": python_tools["insightface"],
-        "ultralytics": python_tools["ultralytics"],
-        "paddleocr": python_tools["paddleocr"],
         "cv2": python_tools["cv2"],
     }
     return report

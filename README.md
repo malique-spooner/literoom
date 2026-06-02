@@ -39,7 +39,7 @@ The goal is to make a media archive that is:
 - `ffmpeg`
 - `libvips`
 
-Optional features also benefit from packages such as `insightface`, `open_clip_torch`, `ultralytics`, `paddleocr`, `whisper`, and `faiss-cpu`, but the app degrades gracefully when some optional tools are missing.
+For the full media stack, install `insightface`, `open_clip_torch`, and `faiss-cpu` alongside the core dependencies.
 
 ### Install
 
@@ -123,9 +123,25 @@ The current suite covers:
 - the local API and review UI
 - filesystem and branding regressions
 
+## Packaging
+
+Build the macOS app bundle and installer image with:
+
+```bash
+make package
+```
+
+That produces:
+
+- `dist/Literoom.app`
+- `dist/Literoom.dmg` when the host can create disk images
+- `dist/Literoom.zip` as a fallback archive when DMG creation is unavailable
+
+The DMG is the preferred installable artifact for a GitHub release, and the ZIP fallback still gives you a clean download if the environment can’t create a disk image.
+
 ## Project Status
 
-Literoom is actively being cleaned up for packaging and release. The core app is working, the test suite is in place, and the remaining work is focused on release polish, desktop packaging, and packaged end-to-end validation.
+Literoom is actively being cleaned up for packaging and release. The core app is working, the test suite is in place, and the remaining work is focused on final release polish, desktop packaging, and packaged end-to-end validation.
 
 See [`ROADMAP.md`](./ROADMAP.md) for the current milestone breakdown.
 

@@ -162,60 +162,6 @@ def _ocr_text_from_image(image_path: Path) -> tuple[Optional[str], str]:
             pass
 
 
-def _extract_audio_track(video_path: Path) -> Optional[Path]:
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if not ffmpeg_bin or not video_path.exists():
-        return None
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
-    proc = subprocess.run(
-        [
-            ffmpeg_bin,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(video_path),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            str(wav_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0 or not wav_path.exists():
-        try:
-            wav_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return None
-    return wav_path
-
-
-def _transcribe_video(video_path: Path, *, model_name: Optional[str] = None) -> tuple[Optional[str], str]:
-    audio_path = _extract_audio_track(video_path)
-    if not audio_path:
-        return None, "audio unavailable"
-    try:
-        import whisper  # type: ignore
-
-        model = whisper.load_model(model_name or "base")
-        result = model.transcribe(str(audio_path))
-        text = (result.get("text") or "").strip()
-        return (text or None), f"whisper:{model_name or 'base'}"
-    except Exception as exc:
-        return None, f"transcription unavailable: {exc}"
-    finally:
-        try:
-            audio_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
 def _asset_text_profile(asset: dict[str, Any], extraction_rows: list[dict[str, Any]]) -> str:
     extracted_text = [row.get("text_content") for row in extraction_rows if row.get("status") == "READY" and row.get("text_content")]
     return _clean_text(
@@ -300,9 +246,8 @@ def extract_asset_content(
     *,
     asset_id: Optional[str] = None,
     limit: Optional[int] = None,
-    whisper_model: Optional[str] = None,
 ) -> Dict[str, int]:
-    processed = ocr_saved = transcript_saved = 0
+    processed = ocr_saved = 0
     for row in manifest.iter_built_assets(db_path, limit=limit):
         if asset_id and row["id"] != asset_id:
             continue
@@ -341,34 +286,10 @@ def extract_asset_content(
                     confidence=0.9,
                 )
                 ocr_saved += 1
-        if asset.get("media_type") == "video" and asset.get("managed_path"):
-            video_path = managed_library_dir / str(asset["managed_path"])
-            transcript_text, tool_name = _transcribe_video(video_path, model_name=whisper_model)
-            manifest.record_extraction_result(
-                db_path,
-                row["id"],
-                result_type="transcript",
-                text_content=transcript_text,
-                payload={"tool": tool_name, "source_path": str(video_path)},
-                status="READY" if transcript_text else "SKIPPED",
-            )
-            if transcript_text:
-                manifest.set_metadata_field(
-                    db_path,
-                    row["id"],
-                    field_name="transcript",
-                    value=transcript_text,
-                    source_name="transcript",
-                    source_field=tool_name,
-                    is_canonical=False,
-                    confidence=0.85,
-                )
-                transcript_saved += 1
     index_result = index_asset_embeddings(db_path, managed_library_dir, asset_id=asset_id, limit=limit)
     return {
         "processed": processed,
         "ocr_saved": ocr_saved,
-        "transcript_saved": transcript_saved,
         **index_result,
     }
 
@@ -505,7 +426,7 @@ def search_assets_semantic(
                     reasons.append("location match")
                 if row.get("extracted_text") and q_tokens & set(_tokenize(str(row.get("extracted_text")))):
                     score += 0.14
-                    reasons.append("ocr/transcript match")
+                    reasons.append("text match")
             if ref_text_vec is not None:
                 ref_text_score = _cosine(ref_text_vec, stored_text_vec)
                 score += ref_text_score * 0.25

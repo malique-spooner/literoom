@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 import json
 import mimetypes
+import sys
 import threading
 from urllib.parse import quote_plus
 
@@ -31,8 +32,17 @@ from .utils.location import reverse_geocode_address
 from .tooling import build_tool_stack_report
 
 
-LOGO_PATH = Path(__file__).resolve().parents[2] / "literoom logo.png"
-FAVICON_PATH = Path(__file__).resolve().parents[2] / "literoom favicon.png"
+def _resource_path(filename: str) -> Path:
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        candidate = Path(frozen_root) / filename
+        if candidate.exists():
+            return candidate
+    return Path(__file__).resolve().parents[2] / filename
+
+
+LOGO_PATH = _resource_path("literoom logo.png")
+FAVICON_PATH = _resource_path("literoom favicon.png")
 
 
 def _page(title: str, body: str, *, history_html: str = "", body_class: str = "") -> str:
@@ -4084,7 +4094,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             tools=current_config.tools.__class__(
                 exiftool=exiftool.strip() or None,
                 ffmpeg=ffmpeg.strip() or None,
-                whisper_model=current_config.tools.whisper_model,
                 clip_model=current_config.tools.clip_model,
                 face_model=current_config.tools.face_model,
             ),

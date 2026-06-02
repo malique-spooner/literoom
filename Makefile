@@ -2,7 +2,7 @@ PYTHON := ./.venv/bin/python
 PIP := ./.venv/bin/pip
 CONFIG ?= literoom.local.yaml
 
-.PHONY: setup doctor test status jobs init-config serve desktop
+.PHONY: setup doctor test status jobs init-config serve desktop package
 
 setup:
 	python3 -m venv .venv
@@ -28,3 +28,6 @@ serve:
 
 desktop:
 	$(PYTHON) -m literoom.cli desktop --config $(CONFIG) --host 127.0.0.1 --port 8000
+
+package:
+	$(PYTHON) tools/package_macos.py

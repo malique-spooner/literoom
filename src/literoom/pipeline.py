@@ -224,7 +224,6 @@ def run_content_extraction(config_path: Path | str = DEFAULT_CONFIG_PATH, *, lim
             db_path=db_path,
             managed_library_dir=config.managed_library_dir(resolved),
             limit=limit,
-            whisper_model=config.tools.whisper_model,
         )
         return _complete_job(db_path, job_id, "content_extraction", {"job_id": job_id, **result})
     except Exception as exc:

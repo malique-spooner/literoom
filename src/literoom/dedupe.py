@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -94,19 +97,10 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
     imagehash = _FallbackImageHashModule()
 
-try:
-    import faiss  # type: ignore
-except Exception:  # pragma: no cover - optional dependency fallback
-    faiss = None
-
-try:
-    import open_clip  # type: ignore
-    from huggingface_hub import try_to_load_from_cache  # type: ignore
-    import torch  # type: ignore
-except Exception:  # pragma: no cover - optional dependency fallback
-    open_clip = None
-    try_to_load_from_cache = None
-    torch = None
+open_clip = None
+try_to_load_from_cache = None
+torch = None
+faiss = None
 
 
 def _canonical_asset(items: List[Dict]) -> str:
@@ -194,10 +188,18 @@ def _clip_pretrained_candidates(pretrained: Optional[str]) -> List[Optional[str]
 
 
 def _clip_weight_is_cached(model_name: str, pretrained_name: Optional[str]) -> bool:
-    if open_clip is None or try_to_load_from_cache is None:
-        return False
     try:
-        cfg = open_clip.get_pretrained_cfg(model_name, pretrained_name or "")
+        if open_clip is None or try_to_load_from_cache is None:
+            from huggingface_hub import try_to_load_from_cache as _try_to_load_from_cache  # type: ignore
+            import open_clip as _open_clip  # type: ignore
+
+            globals()["open_clip"] = _open_clip
+            globals()["try_to_load_from_cache"] = _try_to_load_from_cache
+        clip_module = globals().get("open_clip")
+        cache_lookup = globals().get("try_to_load_from_cache")
+        if clip_module is None or cache_lookup is None:
+            return False
+        cfg = clip_module.get_pretrained_cfg(model_name, pretrained_name or "")
     except Exception:
         return False
     repo = str(cfg.get("hf_hub") or "").strip().rstrip("/")
@@ -209,7 +211,7 @@ def _clip_weight_is_cached(model_name: str, pretrained_name: Optional[str]) -> b
     filenames.extend(["open_clip_model.safetensors", "open_clip_pytorch_model.bin"])
     for filename in dict.fromkeys(name for name in filenames if name):
         try:
-            cached = try_to_load_from_cache(repo, filename)
+            cached = cache_lookup(repo, filename)
         except Exception:
             cached = None
         if cached:
@@ -219,6 +221,19 @@ def _clip_weight_is_cached(model_name: str, pretrained_name: Optional[str]) -> b
 
 @lru_cache(maxsize=4)
 def _clip_backend(clip_model: Optional[str]) -> Optional[Dict[str, object]]:
+    global open_clip, torch
+    if open_clip is None or torch is None:
+        try:
+            if open_clip is None:
+                import open_clip as _open_clip  # type: ignore
+
+                open_clip = _open_clip
+            if torch is None:
+                import torch as _torch  # type: ignore
+
+                torch = _torch
+        except Exception:
+            return None
     if open_clip is None or torch is None:
         return None
     model_name, pretrained = _normalize_clip_spec(clip_model)
@@ -269,6 +284,14 @@ def _clip_embedding(path: Path, clip_model: Optional[str]) -> Optional[List[floa
 
 
 def _build_faiss_neighbors(vectors: List[List[float]], *, top_k: int = 6):
+    global faiss
+    if faiss is None:
+        try:
+            import faiss as _faiss  # type: ignore
+
+            faiss = _faiss
+        except Exception:
+            return None
     if faiss is None or not vectors:
         return None
     matrix = np.asarray(vectors, dtype="float32")
