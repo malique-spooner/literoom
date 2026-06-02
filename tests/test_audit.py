@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.audit import build_audit_report, format_audit_report
-from photo_unifier.metadata import manifest
+from literoom.audit import build_audit_report, format_audit_report
+from literoom.metadata import manifest
 
 
 class AuditTests(unittest.TestCase):

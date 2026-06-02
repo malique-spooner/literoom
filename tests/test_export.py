@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.config import AppConfig, save_config
-from photo_unifier.metadata import manifest
-from photo_unifier.pipeline import run_export_library
-from photo_unifier.utils.hashing import sha256_file
+from literoom.config import AppConfig, save_config
+from literoom.metadata import manifest
+from literoom.pipeline import run_export_library
+from literoom.utils.hashing import sha256_file
 
 
 class ExportTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class ExportTests(unittest.TestCase):
             source_file.parent.mkdir(parents=True, exist_ok=True)
             source_file.write_bytes(b"example-image-bytes")
 
-            db_path = root / ".photo_unifier" / "manifest.sqlite"
+            db_path = root / ".literoom" / "manifest.sqlite"
             manifest.init_db(db_path)
 
             asset_hash = sha256_file(source_file)

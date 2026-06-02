@@ -5,8 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from photo_unifier.config import load_config
-from photo_unifier.metadata import manifest
+from literoom.config import load_config
+from literoom.metadata import manifest
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -183,7 +183,7 @@ def build_seed_benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export a seeded face benchmark from confirmed identities.")
-    parser.add_argument("--config", default="photo-unifier.local.yaml")
+    parser.add_argument("--config", default="literoom.local.yaml")
     parser.add_argument("--output", default="benchmarks/face-benchmark.seed.jsonl")
     parser.add_argument("--positives-per-identity", type=int, default=24)
     parser.add_argument("--hard-negatives-per-identity", type=int, default=16)

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from photo_unifier.config import ToolPaths
-from photo_unifier.tooling import build_tool_stack_report
+from literoom.config import ToolPaths
+from literoom.tooling import build_tool_stack_report
 
 
 class ToolingTests(unittest.TestCase):

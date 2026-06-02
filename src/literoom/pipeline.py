@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -57,6 +58,23 @@ def run_ingest(
             job_id=job_id,
         )
         snapchat_sequence_groups = manifest.build_snapchat_sequence_groups(db_path)
+        missing_sources = 0
+        malformed_sources = 0
+        source_issues = []
+        job_rows = manifest.list_jobs(db_path, limit=50)
+        for row in job_rows:
+            if row.get("id") != job_id:
+                continue
+            metrics = row.get("metrics_json")
+            if metrics:
+                try:
+                    payload = json.loads(metrics)
+                except Exception:
+                    payload = {}
+                missing_sources = int(payload.get("missing_sources") or 0)
+                malformed_sources = int(payload.get("malformed_sources") or 0)
+                source_issues = list(payload.get("source_issues") or [])
+            break
         return _complete_job(
             db_path,
             job_id,
@@ -64,6 +82,9 @@ def run_ingest(
             {
                 "job_id": job_id,
                 "rows_upserted": total,
+                "missing_sources": missing_sources,
+                "malformed_sources": malformed_sources,
+                "source_issues": source_issues,
                 "snapchat_sequence_groups": snapchat_sequence_groups,
             },
         )

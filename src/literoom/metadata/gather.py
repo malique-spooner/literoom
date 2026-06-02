@@ -11,7 +11,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 try:
     from timezonefinder import TimezoneFinder
@@ -717,155 +717,168 @@ def _choose_canonical_time(
     return None
 
 
-def scan_zip(zip_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
-    with zipfile.ZipFile(zip_path, "r") as zp:
-        files = _list_zip_members(zp)
-        src = (source_hint or detect_source(zip_path, (zi.filename for zi in files))).lower()
-        side_idx = _build_sidecar_index(files)
-        apple_csv_idx = _build_apple_csv_index(files, zp)
-        snapchat_rows = load_history_rows_for_export(str(zip_path)) if src == "snapchat" or looks_like_snapchat_export(zip_path, (zi.filename for zi in files)) else []
-        snapchat_day_type = group_rows_by_day_type(snapchat_rows) if snapchat_rows else {}
-        snapchat_row_map: dict[str, dict[str, Any]] = {}
-        if snapchat_rows:
-            snapchat_grouped_files: dict[tuple[str, str], list[str]] = {}
+def scan_zip(
+    zip_path: Path,
+    source_hint: Optional[str] = None,
+    on_error: Optional[Callable[[Path, Exception], None]] = None,
+) -> Iterator[Dict[str, Any]]:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zp:
+            files = _list_zip_members(zp)
+            src = (source_hint or detect_source(zip_path, (zi.filename for zi in files))).lower()
+            side_idx = _build_sidecar_index(files)
+            apple_csv_idx = _build_apple_csv_index(files, zp)
+            snapchat_rows = load_history_rows_for_export(str(zip_path)) if src == "snapchat" or looks_like_snapchat_export(zip_path, (zi.filename for zi in files)) else []
+            snapchat_day_type = group_rows_by_day_type(snapchat_rows) if snapchat_rows else {}
+            snapchat_row_map: dict[str, dict[str, Any]] = {}
+            if snapchat_rows:
+                snapchat_grouped_files: dict[tuple[str, str], list[str]] = {}
+                for zi in files:
+                    inner = zi.filename
+                    ext = Path(inner).suffix.lower()
+                    media_type = _classify_media_type(ext)
+                    if media_type not in {"image", "video"}:
+                        continue
+                    if src == "snapchat" and not is_snapchat_main_media(inner):
+                        continue
+                    base_name = Path(inner).name
+                    key = (base_name[:10], media_type)
+                    snapchat_grouped_files.setdefault(key, []).append(inner)
+                for key, inner_paths in snapchat_grouped_files.items():
+                    rows_for_key = snapchat_day_type.get(key) or []
+                    if len(rows_for_key) != len(inner_paths):
+                        continue
+                    ordered_rows = order_rows_for_snapchat_group(rows_for_key)
+                    for inner_path, row in zip(inner_paths, ordered_rows):
+                        snapchat_row_map[inner_path] = row
+
             for zi in files:
                 inner = zi.filename
                 ext = Path(inner).suffix.lower()
                 media_type = _classify_media_type(ext)
-                if media_type not in {"image", "video"}:
+                if media_type not in {"image", "video", "raw"}:
                     continue
                 if src == "snapchat" and not is_snapchat_main_media(inner):
+                    if is_snapchat_overlay(inner):
+                        continue
                     continue
+
                 base_name = Path(inner).name
-                key = (base_name[:10], media_type)
-                snapchat_grouped_files.setdefault(key, []).append(inner)
-            for key, inner_paths in snapchat_grouped_files.items():
-                rows_for_key = snapchat_day_type.get(key) or []
-                if len(rows_for_key) != len(inner_paths):
-                    continue
-                ordered_rows = order_rows_for_snapchat_group(rows_for_key)
-                for inner_path, row in zip(inner_paths, ordered_rows):
-                    snapchat_row_map[inner_path] = row
+                filename_dt = _parse_from_filename(base_name)
+                gps_lat = gps_lon = gps_alt = None
+                title = description = None
+                people = None
+                source_dt = None
+                source_gps = None
 
-        for zi in files:
-            inner = zi.filename
-            ext = Path(inner).suffix.lower()
-            media_type = _classify_media_type(ext)
-            if media_type not in {"image", "video", "raw"}:
-                continue
-            if src == "snapchat" and not is_snapchat_main_media(inner):
-                if is_snapchat_overlay(inner):
-                    continue
-                continue
-
-            base_name = Path(inner).name
-            filename_dt = _parse_from_filename(base_name)
-            gps_lat = gps_lon = gps_alt = None
-            title = description = None
-            people = None
-            source_dt = None
-            source_gps = None
-
-            apple_local = apple_csv_idx.get(base_name.lower())
-            if src == "snapchat":
-                day_key = (base_name[:10], "video" if media_type == "video" else "image")
-                exact_match = snapchat_row_map.get(inner)
-                if not exact_match:
-                    candidates = snapchat_day_type.get(day_key) or []
-                    if len(candidates) == 1:
-                        exact_match = candidates[0]
-                if exact_match:
-                    if exact_match.get("captured_at_utc"):
-                        try:
-                            dt_final = datetime.fromisoformat(exact_match["captured_at_utc"]).strftime("%Y-%m-%dT%H:%M:%S")
-                        except Exception:
+                apple_local = apple_csv_idx.get(base_name.lower())
+                if src == "snapchat":
+                    day_key = (base_name[:10], "video" if media_type == "video" else "image")
+                    exact_match = snapchat_row_map.get(inner)
+                    if not exact_match:
+                        candidates = snapchat_day_type.get(day_key) or []
+                        if len(candidates) == 1:
+                            exact_match = candidates[0]
+                    if exact_match:
+                        if exact_match.get("captured_at_utc"):
+                            try:
+                                dt_final = datetime.fromisoformat(exact_match["captured_at_utc"]).strftime("%Y-%m-%dT%H:%M:%S")
+                            except Exception:
+                                dt_final = None
+                        else:
                             dt_final = None
+                        if exact_match.get("location"):
+                            gps_lat = exact_match["location"]["lat"]
+                            gps_lon = exact_match["location"]["lon"]
+                            gps_alt = exact_match["location"].get("alt")
+                            source_gps = "snapchat_json"
+                        source_dt = "snapchat_history"
                     else:
                         dt_final = None
-                    if exact_match.get("location"):
-                        gps_lat = exact_match["location"]["lat"]
-                        gps_lon = exact_match["location"]["lon"]
-                        gps_alt = exact_match["location"].get("alt")
-                        source_gps = "snapchat_json"
-                    source_dt = "snapchat_history"
+                        source_dt = "snapchat_history"
+                elif src == "apple" or apple_local is not None:
+                    sc = _find_sidecar(inner, side_idx)
+                    if sc:
+                        obj = _read_json_from_zip(zp, sc) or {}
+                        loc = parse_location_candidate(
+                            obj.get("location")
+                            or obj.get("geoData")
+                            or obj.get("geoDataExif")
+                            or obj.get("geo")
+                            or obj.get("coordinates")
+                            or obj.get("position")
+                            or obj
+                        )
+                        if loc:
+                            gps_lat = loc["lat"]
+                            gps_lon = loc["lon"]
+                            gps_alt = loc.get("alt")
+                            source_gps = "apple_json"
+                        title = _normalize_text_value(_first_nested_value(obj, ("title", "filename", "name")))
+                        description = _normalize_text_value(_first_nested_value(obj, ("description", "caption", "Caption", "story")))
+                        people = _normalize_people_value(_first_nested_value(obj, ("people", "faces", "faceNames", "recognizedFaces", "faceAnnotations"))) or None
+                    dt_final = _choose_canonical_time(filename_dt, apple_local, None, gps_lat, gps_lon)
+                    source_dt = "apple_csv" if apple_local else ("filename" if filename_dt else "zip_mtime")
+                elif src == "google":
+                    sc = _find_sidecar(inner, side_idx)
+                    gmeta = None
+                    if sc:
+                        obj = _read_json_from_zip(zp, sc) or {}
+                        gmeta = _parse_google(obj)
+                        if gmeta.gps_lat is not None and gmeta.gps_lon is not None:
+                            gps_lat, gps_lon, gps_alt = gmeta.gps_lat, gmeta.gps_lon, gmeta.gps_alt
+                            source_gps = "google_json"
+                        title = gmeta.title
+                        description = gmeta.description
+                        people = gmeta.people
+                    dt_final = _choose_canonical_time(filename_dt, None, gmeta, gps_lat, gps_lon)
+                    if gmeta and gmeta.ts_utc is not None:
+                        source_dt = "google_epoch"
+                    elif gmeta and gmeta.fmt_utc:
+                        source_dt = "google_formatted"
+                    else:
+                        source_dt = "filename" if filename_dt else "zip_mtime"
                 else:
-                    dt_final = None
-                    source_dt = "snapchat_history"
-            elif src == "apple" or apple_local is not None:
-                sc = _find_sidecar(inner, side_idx)
-                if sc:
-                    obj = _read_json_from_zip(zp, sc) or {}
-                    loc = parse_location_candidate(
-                        obj.get("location")
-                        or obj.get("geoData")
-                        or obj.get("geoDataExif")
-                        or obj.get("geo")
-                        or obj.get("coordinates")
-                        or obj.get("position")
-                        or obj
-                    )
-                    if loc:
-                        gps_lat = loc["lat"]
-                        gps_lon = loc["lon"]
-                        gps_alt = loc.get("alt")
-                        source_gps = "apple_json"
-                    title = _normalize_text_value(_first_nested_value(obj, ("title", "filename", "name")))
-                    description = _normalize_text_value(_first_nested_value(obj, ("description", "caption", "Caption", "story")))
-                    people = _normalize_people_value(_first_nested_value(obj, ("people", "faces", "faceNames", "recognizedFaces", "faceAnnotations"))) or None
-                dt_final = _choose_canonical_time(filename_dt, apple_local, None, gps_lat, gps_lon)
-                source_dt = "apple_csv" if apple_local else ("filename" if filename_dt else "zip_mtime")
-            elif src == "google":
-                sc = _find_sidecar(inner, side_idx)
-                gmeta = None
-                if sc:
-                    obj = _read_json_from_zip(zp, sc) or {}
-                    gmeta = _parse_google(obj)
-                    if gmeta.gps_lat is not None and gmeta.gps_lon is not None:
-                        gps_lat, gps_lon, gps_alt = gmeta.gps_lat, gmeta.gps_lon, gmeta.gps_alt
-                        source_gps = "google_json"
-                    title = gmeta.title
-                    description = gmeta.description
-                    people = gmeta.people
-                dt_final = _choose_canonical_time(filename_dt, None, gmeta, gps_lat, gps_lon)
-                if gmeta and gmeta.ts_utc is not None:
-                    source_dt = "google_epoch"
-                elif gmeta and gmeta.fmt_utc:
-                    source_dt = "google_formatted"
-                else:
+                    dt_final = _fmt_naive_iso(filename_dt) if filename_dt else None
                     source_dt = "filename" if filename_dt else "zip_mtime"
-            else:
-                dt_final = _fmt_naive_iso(filename_dt) if filename_dt else None
-                source_dt = "filename" if filename_dt else "zip_mtime"
 
-            yield {
-                "source": src,
-                "abs_zip": str(zip_path),
-                "zip_path": inner,
-                "source_kind": "zip",
-                "source_root": str(zip_path.parent),
-                "source_locator": str(zip_path),
-                "source_path": inner,
-                "media_type": media_type,
-                "orig_filename": base_name,
-                "orig_ext": ext,
-                "orig_size": zi.file_size,
-                "dt_original": dt_final,
-                "gps_lat": gps_lat,
-                "gps_lon": gps_lon,
-                "gps_alt": gps_alt,
-                "title": title,
-                "description": description,
-                "keywords": None,
-                "people": people,
-                "live_group_id": None,
-                "burst_id": None,
-                "src_mtime": _zip_mtime_to_iso(zi),
-                "source_dt": source_dt,
-                "source_gps": source_gps,
-            }
+                yield {
+                    "source": src,
+                    "abs_zip": str(zip_path),
+                    "zip_path": inner,
+                    "source_kind": "zip",
+                    "source_root": str(zip_path.parent),
+                    "source_locator": str(zip_path),
+                    "source_path": inner,
+                    "media_type": media_type,
+                    "orig_filename": base_name,
+                    "orig_ext": ext,
+                    "orig_size": zi.file_size,
+                    "dt_original": dt_final,
+                    "gps_lat": gps_lat,
+                    "gps_lon": gps_lon,
+                    "gps_alt": gps_alt,
+                    "title": title,
+                    "description": description,
+                    "keywords": None,
+                    "people": people,
+                    "live_group_id": None,
+                    "burst_id": None,
+                    "src_mtime": _zip_mtime_to_iso(zi),
+                    "source_dt": source_dt,
+                    "source_gps": source_gps,
+                }
+    except (OSError, zipfile.BadZipFile) as exc:
+        if on_error:
+            on_error(zip_path, exc)
+        return
 
 
-def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+def scan_directory(
+    root: Path,
+    source_hint: Optional[str] = None,
+    on_error: Optional[Callable[[Path, Exception], None]] = None,
+) -> Iterator[Dict[str, Any]]:
     apple_csv_idx = _build_apple_csv_index_from_root(root)
     insta360_idx = _build_insta360_index_from_root(root)
     for path in root.rglob("*"):
@@ -875,7 +888,11 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
         except OSError:
             continue
         if path.suffix.lower() == ".zip":
-            yield from scan_zip(path, source_hint=source_hint)
+            try:
+                yield from scan_zip(path, source_hint=source_hint, on_error=on_error)
+            except (OSError, zipfile.BadZipFile) as exc:
+                if on_error:
+                    on_error(path, exc)
             continue
         src = (source_hint or detect_source(path)).lower()
         ext = path.suffix.lower()
@@ -920,9 +937,17 @@ def scan_directory(root: Path, source_hint: Optional[str] = None) -> Iterator[Di
         yield _apply_insta360_context(row, path, insta360_idx)
 
 
-def scan_file(file_path: Path, source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+def scan_file(
+    file_path: Path,
+    source_hint: Optional[str] = None,
+    on_error: Optional[Callable[[Path, Exception], None]] = None,
+) -> Iterator[Dict[str, Any]]:
     if file_path.suffix.lower() == ".zip":
-        yield from scan_zip(file_path, source_hint=source_hint)
+        try:
+            yield from scan_zip(file_path, source_hint=source_hint, on_error=on_error)
+        except (OSError, zipfile.BadZipFile) as exc:
+            if on_error:
+                on_error(file_path, exc)
         return
     src = (source_hint or detect_source(file_path)).lower()
     insta360_root = file_path.parent.parent if len(file_path.parents) > 1 else file_path.parent
@@ -968,15 +993,19 @@ def scan_file(file_path: Path, source_hint: Optional[str] = None) -> Iterator[Di
     yield _apply_insta360_context(row, file_path, insta360_idx)
 
 
-def scan_sources(paths: Iterable[Path], source_hint: Optional[str] = None) -> Iterator[Dict[str, Any]]:
+def scan_sources(
+    paths: Iterable[Path],
+    source_hint: Optional[str] = None,
+    on_error: Optional[Callable[[Path, Exception], None]] = None,
+) -> Iterator[Dict[str, Any]]:
     for item in paths:
         p = Path(item)
         if not p.exists():
             continue
         if p.is_dir():
-            yield from scan_directory(p, source_hint=source_hint)
+            yield from scan_directory(p, source_hint=source_hint, on_error=on_error)
         elif p.is_file():
-            yield from scan_file(p, source_hint=source_hint)
+            yield from scan_file(p, source_hint=source_hint, on_error=on_error)
 
 
 def run(
@@ -986,30 +1015,57 @@ def run(
     batch_size: int = 500,
     job_id: Optional[str] = None,
 ) -> int:
-    candidates = [Path(p) for p in paths if Path(p).exists()]
     manifest.init_db(Path(db_path))
 
     total = 0
     batch: List[Dict[str, Any]] = []
-    for row in scan_sources(candidates, source_hint=source_hint):
-        batch.append(row)
-        if len(batch) >= batch_size:
-            total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
+    stats: Dict[str, Any] = {
+        "stage": "ingest",
+        "processed_assets": 0,
+        "source_count": len(paths),
+        "missing_sources": 0,
+        "malformed_sources": 0,
+        "source_issues": [],
+    }
+
+    def record_progress() -> None:
+        if job_id:
+            manifest.attach_job_metrics(Path(db_path), job_id, stats)
+
+    def record_source_issue(path: Path, exc: Exception) -> None:
+        stats["malformed_sources"] += 1
+        issues = stats.setdefault("source_issues", [])
+        if isinstance(issues, list) and len(issues) < 10:
+            issues.append({"path": str(path), "error": str(exc)})
+        record_progress()
+
+    for item in paths:
+        path = Path(item)
+        if not path.exists():
+            stats["missing_sources"] += 1
             if job_id:
-                manifest.attach_job_metrics(
-                    Path(db_path),
-                    job_id,
-                    {"stage": "ingest", "processed_assets": total},
-                )
-            batch.clear()
+                stats["source_issues"].append({"path": str(path), "error": "missing source"})
+                record_progress()
+            continue
+        if path.is_dir():
+            iterator = scan_directory(path, source_hint=source_hint, on_error=record_source_issue)
+        elif path.is_file():
+            iterator = scan_file(path, source_hint=source_hint, on_error=record_source_issue)
+        else:
+            stats["source_issues"].append({"path": str(path), "error": "unsupported source"})
+            record_progress()
+            continue
+        for row in iterator:
+            batch.append(row)
+            if len(batch) >= batch_size:
+                total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
+                stats["processed_assets"] = total
+                record_progress()
+                batch.clear()
     if batch:
         total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
-        if job_id:
-            manifest.attach_job_metrics(
-                Path(db_path),
-                job_id,
-                {"stage": "ingest", "processed_assets": total},
-            )
+        stats["processed_assets"] = total
+        record_progress()
         batch.clear()
     return total
 

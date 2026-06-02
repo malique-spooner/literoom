@@ -19,8 +19,8 @@ except Exception:
     DBSCAN = None  # type: ignore[assignment]
     SKLEARN_AVAILABLE = False
 
-from photo_unifier.config import load_config
-from photo_unifier.metadata import manifest
+from literoom.config import load_config
+from literoom.metadata import manifest
 
 
 MIN_ASSET_EVIDENCE = 10
@@ -279,7 +279,7 @@ def run_bakeoff(config_path: Path, model_name: str) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="photo-unifier.local.yaml")
+    parser.add_argument("--config", default="literoom.local.yaml")
     parser.add_argument("--model-name", default="insightface_antelopev2")
     args = parser.parse_args()
     results = run_bakeoff(Path(args.config), args.model_name)

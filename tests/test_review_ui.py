@@ -7,11 +7,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from photo_unifier.metadata import manifest
+from literoom.metadata import manifest
 
 try:
     from fastapi.testclient import TestClient
-    from photo_unifier.api import create_app
+    from literoom.api import create_app
 
     FASTAPI_AVAILABLE = True
 except Exception:
@@ -31,8 +31,8 @@ class ReviewUiTests(unittest.TestCase):
                     "sources: []",
                     "paths:",
                     f"  db_path: {db_path}",
-                    f"  library_dir: {managed}",
-                    f"  previews_dir: {derived}",
+                    f"  managed_library_dir: {managed}",
+                    f"  derivatives_dir: {derived}",
                     f"  logs_dir: {root / 'logs'}",
                     f"  temp_dir: {root / 'tmp'}",
                 ]
@@ -163,6 +163,15 @@ class ReviewUiTests(unittest.TestCase):
                 f"/app/assets/{other_id}/review?rating=4&state=reviewed",
                 follow_redirects=False,
             )
+            edit_action = client.get(
+                f"/app/assets/{other_id}/edit",
+                params={
+                    "title": "Sunlit desk",
+                    "description": "A quick browser smoke test",
+                    "address": "12 Example Street",
+                },
+                follow_redirects=False,
+            )
             tag_action = client.get(
                 f"/app/assets/{other_id}/people?person=Nova",
                 follow_redirects=False,
@@ -258,6 +267,10 @@ class ReviewUiTests(unittest.TestCase):
                 follow_redirects=False,
             )
             self.assertEqual(hide_action.status_code, 303)
+            review_after_hide = client.get("/app/review")
+            self.assertEqual(review_after_hide.status_code, 200)
+            self.assertIn("No exact duplicates right now.", review_after_hide.text)
+            self.assertNotIn("100% duplicate", review_after_hide.text)
             self.assertEqual(compare_page.status_code, 303)
             self.assertEqual(compare_page.headers["location"], "/app/review")
             self.assertEqual(asset_page.status_code, 200)
@@ -268,6 +281,7 @@ class ReviewUiTests(unittest.TestCase):
             self.assertEqual(saved_search_page.status_code, 200)
             self.assertIn("Saved Searches", saved_search_page.text)
             self.assertEqual(review_action.status_code, 303)
+            self.assertEqual(edit_action.status_code, 303)
             self.assertEqual(tag_action.status_code, 303)
             self.assertEqual(bulk_tag_action.status_code, 303)
             self.assertEqual(remove_action.status_code, 303)
@@ -289,6 +303,12 @@ class ReviewUiTests(unittest.TestCase):
             self.assertEqual(refreshed["user_rating"], 4)
             self.assertEqual(refreshed["review_state"], "reviewed")
             self.assertNotIn("Nova", refreshed["people_json"])
+            self.assertEqual(refreshed["title"], "Sunlit desk")
+            self.assertEqual(refreshed["description"], "A quick browser smoke test")
+            refreshed_payload = manifest.export_asset_metadata_payload(db_path, other_id)
+            self.assertEqual(refreshed_payload["normalized_metadata"]["title"], "Sunlit desk")
+            self.assertEqual(refreshed_payload["normalized_metadata"]["description"], "A quick browser smoke test")
+            self.assertEqual(refreshed_payload["normalized_metadata"]["location"], "12 Example Street")
             refreshed_identity = manifest.list_face_identities(db_path, limit=10, status="CONFIRMED")[0]
             self.assertEqual(refreshed_identity["label"], "Avery Lane")
             assets_for_person = manifest.list_assets_for_person(db_path, "Avery Lane")
