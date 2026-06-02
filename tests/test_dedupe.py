@@ -518,8 +518,8 @@ class DedupeTests(unittest.TestCase):
                 finished.set()
                 return {"rows_upserted": 0}
 
-            with mock.patch("photo_unifier.api.run_ingest", side_effect=fake_run_ingest) as ingest_mock, mock.patch(
-                "photo_unifier.api.run_face_detection"
+            with mock.patch("literoom.api.run_ingest", side_effect=fake_run_ingest) as ingest_mock, mock.patch(
+                "literoom.api.run_face_detection"
             ) as face_mock:
                 response = client.get("/app/actions/run-now", follow_redirects=False)
                 self.assertEqual(response.status_code, 303)
