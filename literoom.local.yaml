@@ -1,8 +1,8 @@
-workspace_root: /Volumes/Extreme SSD/MSp/Photo Unifier
+workspace_root: /Volumes/Extreme SSD/MSp/Literoom
 sources:
-  - /Volumes/Extreme SSD/MSp/Photo Unifier/imports
+  - /Volumes/Extreme SSD/MSp/Literoom/imports
 paths:
-  db_path: .photo_unifier/manifest.sqlite
+  db_path: .literoom/manifest.sqlite
   managed_library_dir: library
   derivatives_dir: previews
   logs_dir: logs

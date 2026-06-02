@@ -6,7 +6,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from photo_unifier.metadata import manifest, master
+from literoom.metadata import manifest, master
 
 
 class MasterBuildTests(unittest.TestCase):

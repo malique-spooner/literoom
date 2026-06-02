@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from photo_unifier.config import AppConfig, load_config, save_config, write_default_config
+from literoom.config import AppConfig, load_config, save_config, write_default_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -16,9 +16,17 @@ class ConfigTests(unittest.TestCase):
             config, resolved = load_config(config_path)
 
             self.assertEqual(resolved, config_path.resolve())
-            self.assertEqual(config.db_path(resolved), (config_path.parent / ".photo_unifier/manifest.sqlite").resolve())
-            self.assertEqual(config.library_dir(resolved), (config_path.parent / "library").resolve())
-            self.assertEqual(config.previews_dir(resolved), (config_path.parent / "previews").resolve())
+            self.assertEqual(config.db_path(resolved), (config_path.parent / ".literoom/manifest.sqlite").resolve())
+            self.assertEqual(config.managed_library_dir(resolved), (config_path.parent / "library").resolve())
+            self.assertEqual(config.derivatives_dir(resolved), (config_path.parent / "previews").resolve())
+
+            config.ensure_workspace_dirs(resolved)
+            self.assertTrue((config_path.parent / "imports").exists())
+            self.assertTrue((config_path.parent / "library").exists())
+            self.assertTrue((config_path.parent / "previews").exists())
+            self.assertTrue((config_path.parent / "logs").exists())
+            self.assertTrue((config_path.parent / "tmp").exists())
+            self.assertTrue((config_path.parent / ".literoom" / "cache").exists())
             self.assertIsNotNone(config.tools.exiftool)
             self.assertIsNotNone(config.tools.ffmpeg)
             self.assertIsNotNone(config.tools.tesseract)

@@ -16,12 +16,11 @@ from .tooling import discover_default_binary_paths
 
 
 DEFAULT_CONFIG_PATH = Path("literoom.local.yaml")
-LEGACY_CONFIG_PATH = Path("photo-unifier.local.yaml")
 
 
 @dataclass
 class WorkspacePaths:
-    db_path: str = ".photo_unifier/manifest.sqlite"
+    db_path: str = ".literoom/manifest.sqlite"
     managed_library_dir: str = "library"
     derivatives_dir: str = "previews"
     logs_dir: str = "logs"
@@ -83,14 +82,8 @@ class AppConfig:
     def managed_library_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.managed_library_dir)
 
-    def library_dir(self, config_path: Path) -> Path:
-        return self.managed_library_dir(config_path)
-
     def derivatives_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.derivatives_dir)
-
-    def previews_dir(self, config_path: Path) -> Path:
-        return self.derivatives_dir(config_path)
 
     def logs_dir(self, config_path: Path) -> Path:
         return self.resolve_path(config_path, self.paths.logs_dir)
@@ -99,7 +92,7 @@ class AppConfig:
         return self.resolve_path(config_path, self.paths.temp_dir)
 
     def cache_dir(self, config_path: Path) -> Path:
-        return self.resolve_path(config_path, ".photo_unifier/cache")
+        return self.resolve_path(config_path, ".literoom/cache")
 
     def resolved_sources(self, config_path: Path, extra_sources: Optional[Iterable[str]] = None) -> List[Path]:
         raw = list(self.sources)
@@ -114,9 +107,10 @@ class AppConfig:
         return out
 
     def ensure_workspace_dirs(self, config_path: Path) -> None:
+        self.resolve_root(config_path).joinpath("imports").mkdir(parents=True, exist_ok=True)
         self.db_path(config_path).parent.mkdir(parents=True, exist_ok=True)
-        self.library_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.previews_dir(config_path).mkdir(parents=True, exist_ok=True)
+        self.managed_library_dir(config_path).mkdir(parents=True, exist_ok=True)
+        self.derivatives_dir(config_path).mkdir(parents=True, exist_ok=True)
         self.logs_dir(config_path).mkdir(parents=True, exist_ok=True)
         self.temp_dir(config_path).mkdir(parents=True, exist_ok=True)
         self.cache_dir(config_path).mkdir(parents=True, exist_ok=True)
@@ -140,37 +134,12 @@ class AppConfig:
         os.environ.setdefault("PADDLEOCR_DISABLE_AUTO_LOGGING_CONFIG", "1")
 
     def to_dict(self) -> Dict[str, Any]:
-        payload = asdict(self)
-        paths = payload.get("paths", {})
-        if isinstance(paths, dict):
-            paths["library_dir"] = paths.pop("managed_library_dir", paths.get("library_dir"))
-            paths["previews_dir"] = paths.pop("derivatives_dir", paths.get("previews_dir"))
-        return payload
+        return asdict(self)
 
 
 def _merge_dataclass(cls, raw: Dict[str, Any]):
     valid = {key: raw[key] for key in raw if key in cls.__dataclass_fields__}
     return cls(**valid)
-
-
-def _normalize_workspace_paths(path_payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = dict(path_payload)
-    legacy_map = {
-        ".photo_unifier/library": "library",
-        ".photo_unifier/derived": "previews",
-        ".photo_unifier/logs": "logs",
-        ".photo_unifier/tmp": "tmp",
-    }
-    for old_value, new_value in legacy_map.items():
-        if normalized.get("managed_library_dir") == old_value:
-            normalized["managed_library_dir"] = new_value
-        if normalized.get("derivatives_dir") == old_value:
-            normalized["derivatives_dir"] = new_value
-        if normalized.get("logs_dir") == old_value:
-            normalized["logs_dir"] = new_value
-        if normalized.get("temp_dir") == old_value:
-            normalized["temp_dir"] = new_value
-    return normalized
 
 
 def _simple_scalar(value: str) -> Any:
@@ -292,10 +261,6 @@ def default_config() -> AppConfig:
 
 def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfig, Path]:
     path = Path(config_path).resolve()
-    if not path.exists() and path.name == DEFAULT_CONFIG_PATH.name:
-        legacy_path = path.with_name(LEGACY_CONFIG_PATH.name)
-        if legacy_path.exists():
-            path = legacy_path.resolve()
     if not path.exists():
         cfg = default_config()
         return cfg, path
@@ -305,16 +270,10 @@ def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfi
         payload = yaml.safe_load(raw_text) or {}
     else:
         payload = _fallback_load_config(raw_text)
-    path_payload = dict(payload.get("paths", {}) or {})
-    if "library_dir" in path_payload and "managed_library_dir" not in path_payload:
-        path_payload["managed_library_dir"] = path_payload["library_dir"]
-    if "previews_dir" in path_payload and "derivatives_dir" not in path_payload:
-        path_payload["derivatives_dir"] = path_payload["previews_dir"]
-    path_payload = _normalize_workspace_paths(path_payload)
     cfg = AppConfig(
         workspace_root=payload.get("workspace_root", "."),
         sources=list(payload.get("sources", [])),
-        paths=_merge_dataclass(WorkspacePaths, path_payload),
+        paths=_merge_dataclass(WorkspacePaths, payload.get("paths", {})),
         tools=_merge_dataclass(ToolPaths, payload.get("tools", {})),
         pipeline=_merge_dataclass(PipelineConfig, payload.get("pipeline", {})),
         thresholds=_merge_dataclass(ThresholdConfig, payload.get("thresholds", {})),
@@ -353,7 +312,6 @@ def save_config(config: AppConfig, config_path: Path | str = DEFAULT_CONFIG_PATH
 __all__ = [
     "AppConfig",
     "DEFAULT_CONFIG_PATH",
-    "LEGACY_CONFIG_PATH",
     "PipelineConfig",
     "ThresholdConfig",
     "ToolPaths",

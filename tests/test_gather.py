@@ -6,7 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from photo_unifier.metadata import gather, manifest
+from literoom.metadata import gather, manifest
+from literoom.pipeline import run_ingest
 
 
 class GatherTests(unittest.TestCase):
@@ -24,6 +25,49 @@ class GatherTests(unittest.TestCase):
 
             self.assertEqual(rows, 1)
             self.assertEqual(overview["assets_total"], 1)
+
+    def test_ingest_reports_missing_and_malformed_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "IMG_20240102_030405.jpg").write_bytes(b"fake-jpeg")
+            (media_dir / "broken.zip").write_bytes(b"not-a-real-zip")
+            missing_dir = root / "missing"
+            db_path = root / "manifest.sqlite"
+            job_id = manifest.create_job(db_path, "ingest", {"sources": [str(media_dir), str(missing_dir)]})
+            manifest.start_job(db_path, job_id)
+
+            rows = gather.run([media_dir, missing_dir], db_path=db_path, batch_size=1, job_id=job_id)
+            jobs = manifest.list_jobs(db_path, limit=10)
+            job = next(row for row in jobs if row["id"] == job_id)
+
+            self.assertEqual(rows, 1)
+            self.assertEqual(job["status"], "RUNNING")
+            metrics = job["metrics_json"]
+            self.assertIsNotNone(metrics)
+            self.assertIn("missing_sources", metrics)
+            self.assertIn("malformed_sources", metrics)
+            self.assertIn("source_issues", metrics)
+            self.assertIn("broken.zip", metrics)
+
+    def test_run_ingest_surfaces_source_reporting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            (media_dir / "IMG_20240102_030405.jpg").write_bytes(b"fake-jpeg")
+            (media_dir / "broken.zip").write_bytes(b"not-a-real-zip")
+            missing_dir = root / "missing"
+            config_path = root / "literoom.local.yaml"
+
+            result = run_ingest(config_path, sources=[media_dir, missing_dir])
+
+            self.assertEqual(result["rows_upserted"], 1)
+            self.assertEqual(result["missing_sources"], 1)
+            self.assertGreaterEqual(result["malformed_sources"], 1)
+            self.assertTrue(result["source_issues"])
+            self.assertTrue(any("broken.zip" in issue["path"] for issue in result["source_issues"]))
 
     def test_ingest_insta360_directory_indexes_insv_and_ignores_lrv(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,10 +7,10 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from photo_unifier.metadata import manifest
-from photo_unifier.metadata.gather import scan_sources, scan_zip
-from photo_unifier.metadata_repair import repair_metadata
-from photo_unifier.utils.location import parse_location_candidate
+from literoom.metadata import manifest
+from literoom.metadata.gather import scan_sources, scan_zip
+from literoom.metadata_repair import repair_metadata
+from literoom.utils.location import parse_location_candidate
 
 
 class SnapchatTests(unittest.TestCase):
@@ -158,7 +158,7 @@ class SnapchatTests(unittest.TestCase):
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
             with patch(
-                "photo_unifier.metadata_repair.read_core_metadata_batch",
+                "literoom.metadata_repair.read_core_metadata_batch",
                 return_value={
                     str(managed_path.resolve()): {
                         "dt_original": "2026-05-09T10:24:55",

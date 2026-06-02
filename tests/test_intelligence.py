@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from photo_unifier import intelligence
-from photo_unifier.metadata import manifest
+from literoom import intelligence
+from literoom.metadata import manifest
 
 
 class IntelligenceTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class IntelligenceTests(unittest.TestCase):
             managed_path.write_bytes(source.read_bytes())
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
-            with patch("photo_unifier.intelligence._ocr_text_from_image", return_value=("boarding pass seat 14A", "mock-ocr")):
+            with patch("literoom.intelligence._ocr_text_from_image", return_value=("boarding pass seat 14A", "mock-ocr")):
                 result = intelligence.extract_asset_content(db_path, managed, limit=1)
 
             extractions = manifest.list_extraction_results(db_path, asset["id"])
@@ -102,7 +102,7 @@ class IntelligenceTests(unittest.TestCase):
                     return "boarding pass gate 12", "mock-ocr"
                 return None, "mock-ocr"
 
-            with patch("photo_unifier.intelligence._ocr_text_from_image", side_effect=_ocr_side_effect):
+            with patch("literoom.intelligence._ocr_text_from_image", side_effect=_ocr_side_effect):
                 intelligence.extract_asset_content(db_path, managed, limit=10)
 
             report = intelligence.search_assets_semantic(db_path, "boarding pass gate")
@@ -247,7 +247,7 @@ class IntelligenceTests(unittest.TestCase):
             )
             manifest.save_face_embedding(db_path, asset_id=assets[1]["id"], face_id="face-b", vector=vector_b)
 
-            from photo_unifier import faces
+            from literoom import faces
 
             cluster_result = faces.cluster_faces(db_path, similarity_threshold=0.94)
             clarifications = manifest.list_face_clarifications(db_path, limit=10)

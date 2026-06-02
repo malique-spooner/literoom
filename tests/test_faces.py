@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from photo_unifier import faces
-from photo_unifier.metadata import manifest
+from literoom import faces
+from literoom.metadata import manifest
 
 try:
     from fastapi.testclient import TestClient
-    from photo_unifier.api import create_app
+    from literoom.api import create_app
 
     FASTAPI_AVAILABLE = True
 except Exception:
@@ -35,8 +35,8 @@ class FacesTests(unittest.TestCase):
                     "sources: []",
                     "paths:",
                     f"  db_path: {db_path}",
-                    f"  library_dir: {managed}",
-                    f"  previews_dir: {derived}",
+                    f"  managed_library_dir: {managed}",
+                    f"  derivatives_dir: {derived}",
                     f"  logs_dir: {root / 'logs'}",
                     f"  temp_dir: {root / 'tmp'}",
                 ]
@@ -139,9 +139,9 @@ class FacesTests(unittest.TestCase):
                 manifest.record_thumbnail(db_path, asset["id"], "primary", str(thumb), "READY")
 
             fake_image = __import__("numpy").random.randint(0, 255, size=(100, 100, 3), dtype="uint8")
-            with patch("photo_unifier.faces._ensure_insightface_ready") as fake_ready, patch(
-                "photo_unifier.faces._insightface_detections"
-            ) as fake_insightface, patch("photo_unifier.faces._cv2") as fake_cv2:
+            with patch("literoom.faces._ensure_insightface_ready") as fake_ready, patch(
+                "literoom.faces._insightface_detections"
+            ) as fake_insightface, patch("literoom.faces._cv2") as fake_cv2:
                 fake_insightface.return_value = [
                     {
                         "bbox": {
@@ -197,7 +197,7 @@ class FacesTests(unittest.TestCase):
             manifest.init_db(db_path)
 
             with patch(
-                "photo_unifier.faces._ensure_insightface_ready",
+                "literoom.faces._ensure_insightface_ready",
                 side_effect=faces.FaceRecognitionQualityError("InsightFace required"),
             ):
                 with self.assertRaises(faces.FaceRecognitionQualityError):
@@ -1216,8 +1216,8 @@ class FacesTests(unittest.TestCase):
             Image.new("RGB", (200, 200), color="white").save(managed_path)
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
-            with patch("photo_unifier.faces._ensure_insightface_ready") as fake_ready, patch(
-                "photo_unifier.faces._insightface_detections",
+            with patch("literoom.faces._ensure_insightface_ready") as fake_ready, patch(
+                "literoom.faces._insightface_detections",
                 return_value=[
                     {
                         "bbox": {
@@ -1232,7 +1232,7 @@ class FacesTests(unittest.TestCase):
                         "embedding_vector": [0.5] * 168,
                     }
                 ],
-            ) as mock_insightface, patch("photo_unifier.faces._cv2") as fake_cv2:
+            ) as mock_insightface, patch("literoom.faces._cv2") as fake_cv2:
                 fake_cv2.return_value.imread.return_value = __import__("numpy").zeros((200, 200, 3), dtype="uint8")
                 result = faces.detect_faces(db_path, managed, face_model="antelopev2")
 

@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from photo_unifier.metadata_repair import repair_metadata
-from photo_unifier.metadata import manifest
+from literoom.metadata_repair import repair_metadata
+from literoom.metadata import manifest
 
 
 class MetadataRepairTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class MetadataRepairTests(unittest.TestCase):
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
             with patch(
-                "photo_unifier.metadata_repair.read_core_metadata_batch",
+                "literoom.metadata_repair.read_core_metadata_batch",
                 return_value={
                     str(managed_path.resolve()): {
                         "dt_original": "2024-01-01T12:34:56",
@@ -206,7 +206,7 @@ class MetadataRepairTests(unittest.TestCase):
             managed_path.write_bytes(source_file.read_bytes())
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
-            with patch("photo_unifier.metadata_repair.read_core_metadata_batch", return_value={}):
+            with patch("literoom.metadata_repair.read_core_metadata_batch", return_value={}):
                 result = repair_metadata(db_path, managed_dir, source_roots=[source_root])
 
             self.assertGreaterEqual(result["repaired"], 1)
@@ -284,7 +284,7 @@ class MetadataRepairTests(unittest.TestCase):
             managed_path.write_bytes(source_file.read_bytes())
             manifest.mark_copied(db_path, asset["id"], "abc123")
 
-            with patch("photo_unifier.metadata_repair.read_core_metadata_batch", return_value={}):
+            with patch("literoom.metadata_repair.read_core_metadata_batch", return_value={}):
                 result = repair_metadata(db_path, managed_dir, source_roots=[source_root])
 
             self.assertGreaterEqual(result["repaired"], 1)

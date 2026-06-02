@@ -25,6 +25,7 @@ from .pipeline import (
     run_plan_library,
     run_pilot_pipeline,
 )
+from .desktop import launch_desktop_app
 
 
 def _load_runtime_config(config_path: Path) -> tuple[object, Path]:
@@ -89,7 +90,15 @@ def jobs_cmd(config_path: Path, limit: int):
 def ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[str]):
     try:
         result = run_ingest(config_path, source_tag=source_tag, sources=list(paths) or None)
-        click.echo(f"Ingested rows: {result['rows_upserted']}")
+        suffix = []
+        if result.get("missing_sources"):
+            suffix.append(f"missing={result['missing_sources']}")
+        if result.get("malformed_sources"):
+            suffix.append(f"malformed={result['malformed_sources']}")
+        if result.get("source_issues"):
+            suffix.append(f"issues={len(result['source_issues'])}")
+        extra = f" ({', '.join(suffix)})" if suffix else ""
+        click.echo(f"Ingested rows: {result['rows_upserted']}{extra}")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -288,6 +297,15 @@ def serve_api_cmd(config_path: Path, host: str, port: int):
 
     app_instance = create_app(config_path)
     uvicorn.run(app_instance, host=host, port=port)
+
+
+@app.command("desktop")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8000, show_default=True, type=int)
+@click.option("--open-browser/--no-open-browser", default=True, show_default=True)
+def desktop_cmd(config_path: Path, host: str, port: int, open_browser: bool):
+    launch_desktop_app(config_path, host=host, port=port, open_browser=open_browser)
 
 
 def main():

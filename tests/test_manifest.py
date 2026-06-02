@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from photo_unifier.metadata import manifest
+from literoom.metadata import manifest
 
 
 class ManifestTests(unittest.TestCase):

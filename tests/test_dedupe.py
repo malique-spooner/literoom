@@ -8,12 +8,12 @@ from unittest import mock
 
 from PIL import Image, ImageDraw
 
-from photo_unifier import dedupe
-from photo_unifier.metadata import manifest
+from literoom import dedupe
+from literoom.metadata import manifest
 
 try:
     from fastapi.testclient import TestClient
-    from photo_unifier.api import create_app
+    from literoom.api import create_app
 
     FASTAPI_AVAILABLE = True
 except Exception:
@@ -33,8 +33,8 @@ class DedupeTests(unittest.TestCase):
                     "sources: []",
                     "paths:",
                     f"  db_path: {db_path}",
-                    f"  library_dir: {managed}",
-                    f"  previews_dir: {derived}",
+                    f"  managed_library_dir: {managed}",
+                    f"  derivatives_dir: {derived}",
                     f"  logs_dir: {root / 'logs'}",
                     f"  temp_dir: {root / 'tmp'}",
                 ]
@@ -374,6 +374,15 @@ class DedupeTests(unittest.TestCase):
             page = client.get("/app/settings")
             self.assertEqual(page.status_code, 200)
             self.assertIn("Settings", page.text)
+            self.assertIn("Choose import folder", page.text)
+            self.assertIn("Choose library folder", page.text)
+            self.assertIn("Run ingest now", page.text)
+            self.assertIn("Recent jobs", page.text)
+            self.assertIn('action="/app/settings/save"', page.text)
+            self.assertIn('name="workspace_root"', page.text)
+            self.assertIn('name="sources_text"', page.text)
+            self.assertIn('name="managed_library_dir_value"', page.text)
+            self.assertIn('name="derivatives_dir_value"', page.text)
 
             response = client.get(
                 "/app/settings/save",
@@ -381,8 +390,8 @@ class DedupeTests(unittest.TestCase):
                     "workspace_root": str(root),
                     "sources_text": "/Volumes/Extreme SSD/MSp/Camera\n/Volumes/Extreme SSD/MSp/Camera/Master",
                     "db_path_value": str(db_path),
-                    "library_dir_value": str(managed),
-                    "previews_dir_value": str(derived),
+                    "managed_library_dir_value": str(managed),
+                    "derivatives_dir_value": str(derived),
                     "logs_dir_value": str(root / "logs"),
                     "temp_dir_value": str(root / "tmp"),
                     "batch_size": 123,
@@ -397,12 +406,72 @@ class DedupeTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 303)
 
-            from photo_unifier.config import load_config
+            from literoom.config import load_config
 
             loaded, _ = load_config(config_path)
             self.assertEqual(loaded.sources[0], "/Volumes/Extreme SSD/MSp/Camera")
             self.assertEqual(loaded.pipeline.batch_size, 123)
             self.assertEqual(loaded.pipeline.auto_sync_interval_seconds, 120)
+            self.assertEqual(loaded.paths.managed_library_dir, str(managed))
+            self.assertEqual(loaded.paths.derivatives_dir, str(derived))
+
+    def test_run_ingest_now_action_triggers_manual_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            import_dir = root / "imports"
+            managed.mkdir()
+            derived.mkdir()
+            import_dir.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "workspace_root: .",
+                        "sources:",
+                        f"  - {import_dir}",
+                        "paths:",
+                        f"  db_path: {db_path}",
+                        f"  managed_library_dir: {managed}",
+                        f"  derivatives_dir: {derived}",
+                        f"  logs_dir: {root / 'logs'}",
+                        f"  temp_dir: {root / 'tmp'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            client = TestClient(create_app(config_path))
+
+            called = []
+            finished = threading.Event()
+
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None):
+                called.append(
+                    (
+                        Path(config_path_arg),
+                        source_tag,
+                        [Path(item) for item in (sources or [])],
+                    )
+                )
+                finished.set()
+                return {"rows_upserted": 0}
+
+            with mock.patch("literoom.api.run_ingest", side_effect=fake_run_ingest) as ingest_mock, mock.patch(
+                "literoom.api.run_face_detection"
+            ) as face_mock:
+                response = client.get("/app/actions/run-now", follow_redirects=False)
+                self.assertEqual(response.status_code, 303)
+                self.assertTrue(finished.wait(2))
+                ingest_mock.assert_called_once()
+                face_mock.assert_not_called()
+
+            self.assertEqual(called[0][1], "manual")
+            self.assertEqual(called[0][2], [import_dir.resolve()])
+            self.assertIn("Run ingest now", client.get("/app/settings").text)
 
     def test_run_ingest_now_action_triggers_manual_ingest(self):
         with tempfile.TemporaryDirectory() as tmp:

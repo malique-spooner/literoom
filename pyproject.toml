@@ -22,7 +22,6 @@ dependencies = [
     "uvicorn",
     "openai-whisper",
     "open_clip_torch",
-    "faiss-cpu",
     "ultralytics",
     "insightface",
     "paddleocr",
@@ -35,7 +34,8 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["photo_unifier*"]
+include = ["literoom*"]
 
 [project.scripts]
-literoom = "photo_unifier.cli:main"
+literoom = "literoom.cli:main"
+literoom-desktop = "literoom.desktop:main"
