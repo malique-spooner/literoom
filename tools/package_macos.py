@@ -77,7 +77,7 @@ def build_app() -> None:
 def build_zip() -> Path:
     if ZIP_PATH.exists():
         ZIP_PATH.unlink()
-    shutil.make_archive(str(ZIP_PATH.with_suffix("")), "zip", root_dir=DIST, base_dir=APP_BUNDLE.name)
+    subprocess.run(["ditto", "-c", "-k", "--keepParent", str(APP_BUNDLE), str(ZIP_PATH)], check=True, cwd=ROOT)
     return ZIP_PATH
 
 
