@@ -13,9 +13,11 @@ BUILD = ROOT / "build"
 APP_NAME = "Literoom"
 APP_BUNDLE = DIST / f"{APP_NAME}.app"
 ZIP_PATH = DIST / f"{APP_NAME}.zip"
+ICON_FILE = BUILD / f"{APP_NAME}.icns"
 LEGACY_COLLECT = DIST / APP_NAME
 LEGACY_STAGING = DIST / "_dmg_staging"
 DS_STORE = DIST / ".DS_Store"
+LOGO_SOURCE = ROOT / "literoom logo.png"
 PYINSTALLER_CONFIG_DIR = Path("/private/tmp/literoom-pyinstaller")
 
 
@@ -34,14 +36,24 @@ def _clean(paths: list[Path]) -> None:
             path.unlink()
 
 
+def build_icon() -> Path:
+    _clean([ICON_FILE])
+    BUILD.mkdir(exist_ok=True)
+    from PIL import Image
+
+    Image.open(LOGO_SOURCE).save(ICON_FILE)
+    return ICON_FILE
+
+
 def build_app() -> None:
     DIST.mkdir(exist_ok=True)
     PYINSTALLER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     pyinstaller = ROOT / ".venv" / "bin" / "pyinstaller"
     entry = ROOT / "src" / "literoom" / "bundle_entry.py"
+    icon = build_icon()
     add_data = [
         "--add-data",
-        f"{ROOT / 'literoom logo.png'}:.",
+        f"{LOGO_SOURCE}:.",
         "--add-data",
         f"{ROOT / 'literoom favicon.png'}:.",
     ]
@@ -52,6 +64,8 @@ def build_app() -> None:
         "--windowed",
         "--noconfirm",
         "--clean",
+        "--icon",
+        str(icon),
         "--paths",
         str(ROOT / "src"),
         *add_data,

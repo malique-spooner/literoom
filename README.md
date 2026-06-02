@@ -80,7 +80,9 @@ literoom doctor
 literoom desktop --host 127.0.0.1 --port 8000
 ```
 
-Then open the local app in your browser and use:
+The launcher opens a friendlier local URL (`literoom.localhost`) instead of a raw loopback address.
+
+Then use:
 
 - Library
 - People

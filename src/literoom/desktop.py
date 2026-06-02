@@ -4,6 +4,14 @@ import argparse
 import webbrowser
 from pathlib import Path
 
+_LOCAL_BROWSER_HOST = "literoom.localhost"
+
+
+def _browser_url(host: str, port: int) -> str:
+    if host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
+        return f"http://{_LOCAL_BROWSER_HOST}:{port}/"
+    return f"http://{host}:{port}/"
+
 
 def launch_desktop_app(config_path: Path, *, host: str = "127.0.0.1", port: int = 8000, open_browser: bool = True) -> None:
     try:
@@ -14,7 +22,7 @@ def launch_desktop_app(config_path: Path, *, host: str = "127.0.0.1", port: int 
     from .api import create_app
 
     if open_browser:
-        webbrowser.open(f"http://{host}:{port}/")
+        webbrowser.open(_browser_url(host, port))
     uvicorn.run(create_app(config_path), host=host, port=port)
 
 
