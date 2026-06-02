@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -50,7 +50,7 @@ CANONICAL_METADATA_STANDARD: List[Dict[str, Any]] = [
 
 
 def utcnow_iso() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -3536,7 +3536,7 @@ def replace_faces_for_asset(
     asset_id: str,
     detections: List[Dict[str, Any]],
     *,
-    source_name: str = "opencv_haar",
+    source_name: str = "insightface",
 ) -> int:
     con = connect(db_path)
     try:

@@ -39,7 +39,7 @@ LOCKED_STACK_GROUPS = (
     (
         "Faces",
         (
-            {"name": "YuNet", "kind": "python", "module": "cv2", "detail": "OpenCV face detector"},
+            {"name": "OpenCV", "kind": "python", "module": "cv2", "detail": "OpenCV image/video helpers"},
             {"name": "InsightFace", "kind": "python", "module": "insightface", "model_field": "face_model"},
         ),
     ),
@@ -217,7 +217,7 @@ def build_tool_stack_report(config_tools: Any) -> Dict[str, Any]:
         "libvips": optional["libvips"],
         "PaddleOCR": locked_stack_index["PaddleOCR"],
         "Whisper": locked_stack_index["Whisper"],
-        "YuNet": locked_stack_index["YuNet"],
+        "OpenCV": locked_stack_index["OpenCV"],
         "InsightFace": locked_stack_index["InsightFace"],
         "YOLO": locked_stack_index["YOLO"],
         "OpenCLIP": locked_stack_index["OpenCLIP"],

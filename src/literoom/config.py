@@ -16,6 +16,7 @@ from .tooling import discover_default_binary_paths
 
 
 DEFAULT_CONFIG_PATH = Path("literoom.local.yaml")
+DEFAULT_WORKSPACE_ROOT = Path("/Volumes/Extreme SSD/MSp/Literoom")
 
 
 @dataclass
@@ -107,29 +108,50 @@ class AppConfig:
         return out
 
     def ensure_workspace_dirs(self, config_path: Path) -> None:
-        self.resolve_root(config_path).joinpath("imports").mkdir(parents=True, exist_ok=True)
-        self.db_path(config_path).parent.mkdir(parents=True, exist_ok=True)
-        self.managed_library_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.derivatives_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.logs_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.temp_dir(config_path).mkdir(parents=True, exist_ok=True)
-        self.cache_dir(config_path).mkdir(parents=True, exist_ok=True)
+        preferred_root = self.resolve_root(config_path)
+        fallback_root = Path(config_path).resolve().parent
+
+        def _create_workspace_tree(root: Path) -> None:
+            (root / "imports").mkdir(parents=True, exist_ok=True)
+            (root / ".literoom").mkdir(parents=True, exist_ok=True)
+            (root / ".literoom" / "manifest.sqlite").parent.mkdir(parents=True, exist_ok=True)
+            Path(root / Path(self.paths.managed_library_dir).name).mkdir(parents=True, exist_ok=True)
+            Path(root / Path(self.paths.derivatives_dir).name).mkdir(parents=True, exist_ok=True)
+            Path(root / Path(self.paths.logs_dir).name).mkdir(parents=True, exist_ok=True)
+            Path(root / Path(self.paths.temp_dir).name).mkdir(parents=True, exist_ok=True)
+            (root / ".literoom" / "cache").mkdir(parents=True, exist_ok=True)
+
+        try:
+            _create_workspace_tree(preferred_root)
+        except PermissionError:
+            _create_workspace_tree(fallback_root)
 
     def prepare_runtime_environment(self, config_path: Path) -> None:
-        cache_root = self.cache_dir(config_path)
-        cache_root.mkdir(parents=True, exist_ok=True)
+        preferred_cache_root = self.cache_dir(config_path)
+        fallback_cache_root = (Path(config_path).resolve().parent / ".literoom/cache").resolve()
+        cache_root = preferred_cache_root
         cache_dirs = {
-            "XDG_CACHE_HOME": cache_root,
-            "MPLCONFIGDIR": cache_root / "matplotlib",
-            "PADDLE_PDX_CACHE_HOME": cache_root / "paddlex",
-            "HF_HOME": cache_root / "huggingface",
-            "TORCH_HOME": cache_root / "torch",
-            "INSIGHTFACE_HOME": cache_root / "insightface",
-            "YOLO_CONFIG_DIR": cache_root / "ultralytics",
+            "XDG_CACHE_HOME": "root",
+            "MPLCONFIGDIR": "matplotlib",
+            "PADDLE_PDX_CACHE_HOME": "paddlex",
+            "HF_HOME": "huggingface",
+            "TORCH_HOME": "torch",
+            "INSIGHTFACE_HOME": "insightface",
+            "YOLO_CONFIG_DIR": "ultralytics",
         }
-        for key, path in cache_dirs.items():
-            path.mkdir(parents=True, exist_ok=True)
-            os.environ.setdefault(key, str(path))
+        for candidate_root in (preferred_cache_root, fallback_cache_root):
+            try:
+                for key, suffix in cache_dirs.items():
+                    path = candidate_root if suffix == "root" else candidate_root / suffix
+                    path.mkdir(parents=True, exist_ok=True)
+                cache_root = candidate_root
+                break
+            except PermissionError:
+                cache_root = fallback_cache_root
+                continue
+        for key, suffix in cache_dirs.items():
+            path = cache_root if suffix == "root" else cache_root / suffix
+            os.environ[key] = str(path)
         os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
         os.environ.setdefault("PADDLEOCR_DISABLE_AUTO_LOGGING_CONFIG", "1")
 
@@ -246,7 +268,9 @@ def _fallback_dump_scalar(value: Any) -> str:
 
 def default_config() -> AppConfig:
     tool_paths = discover_default_binary_paths()
+    workspace_root = str(DEFAULT_WORKSPACE_ROOT) if DEFAULT_WORKSPACE_ROOT.exists() else "."
     return AppConfig(
+        workspace_root=workspace_root,
         tools=ToolPaths(
             exiftool=tool_paths.get("exiftool"),
             ffmpeg=tool_paths.get("ffmpeg"),
@@ -312,6 +336,7 @@ def save_config(config: AppConfig, config_path: Path | str = DEFAULT_CONFIG_PATH
 __all__ = [
     "AppConfig",
     "DEFAULT_CONFIG_PATH",
+    "DEFAULT_WORKSPACE_ROOT",
     "PipelineConfig",
     "ThresholdConfig",
     "ToolPaths",

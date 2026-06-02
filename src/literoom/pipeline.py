@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -19,7 +20,13 @@ def load_runtime(config_path: Path | str = DEFAULT_CONFIG_PATH):
     config.prepare_runtime_environment(resolved)
     config.ensure_workspace_dirs(resolved)
     db_path = config.db_path(resolved)
-    manifest.init_db(db_path)
+    try:
+        manifest.init_db(db_path)
+    except (PermissionError, sqlite3.OperationalError):
+        fallback_db_path = (Path(resolved).parent / ".literoom/manifest.sqlite").resolve()
+        if fallback_db_path != db_path:
+            db_path = fallback_db_path
+            manifest.init_db(db_path)
     return config, resolved, db_path
 
 

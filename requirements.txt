@@ -1,12 +1,6 @@
 click
 pillow
-imagehash
-python-dateutil
-tqdm
-rich
-pydantic
 pyyaml
-python-json-logger
 timezonefinder
 fastapi
 uvicorn

@@ -2,10 +2,10 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
-photo-unifier.local.yaml
+literoom.local.yaml
 .DS_Store
 ._*
 Thumbs.db
 .env
 .logs/
-.photo_unifier/
+.literoom/

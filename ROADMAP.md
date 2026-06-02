@@ -60,6 +60,13 @@ Status: 100% complete.
 - produce a distributable bundle or installer that a non-developer can open and use
 - define the later Windows packaging path after the macOS bundle is stable
 
+## 8. Packaged validation
+
+- run the packaged macOS app end to end on a clean machine or clean user profile
+- verify first launch, folder selection, ingest, review, and relaunch behavior from the bundle
+- fix any packaging-only issues that do not show up in the normal developer workflow
+- confirm the distributable is ready for release after the packaged test passes
+
 ## Done when
 
 - the repo, package, app, folders, and docs all say Literoom

@@ -16,7 +16,83 @@ from .utils.hashing import sha256_file
 try:
     import imagehash
 except Exception:  # pragma: no cover - optional dependency fallback
-    imagehash = None
+    class _FallbackHash:
+        def __init__(self, bits: np.ndarray):
+            self.hash = np.asarray(bits, dtype=bool)
+
+        def __sub__(self, other: object) -> int:
+            other_bits = getattr(other, "hash", None)
+            if other_bits is None:
+                return int(self.hash.size)
+            left = self.hash.reshape(-1)
+            right = np.asarray(other_bits, dtype=bool).reshape(-1)
+            size = min(left.size, right.size)
+            distance = int(np.count_nonzero(left[:size] != right[:size]))
+            return distance + abs(left.size - right.size)
+
+    class _FallbackCropHash(_FallbackHash):
+        def matches(self, other: object, hamming_cutoff: int = 12) -> bool:
+            return self - other <= hamming_cutoff
+
+        def hash_diff(self, other: object) -> tuple[int, int]:
+            other_bits = getattr(other, "hash", None)
+            if other_bits is None:
+                return self.hash.size, self.hash.size
+            right = np.asarray(other_bits, dtype=bool).reshape(-1)
+            left = self.hash.reshape(-1)
+            size = min(left.size, right.size)
+            distance = int(np.count_nonzero(left[:size] != right[:size]))
+            return self.hash.size, distance + abs(left.size - right.size)
+
+    def _resize_gray(img: Image.Image, size: tuple[int, int]) -> np.ndarray:
+        return np.asarray(ImageOps.exif_transpose(img).convert("L").resize(size, Image.Resampling.LANCZOS), dtype=np.float32)
+
+    def _mean_bits(values: np.ndarray) -> np.ndarray:
+        return values > float(values.mean())
+
+    class _FallbackImageHashModule:
+        @staticmethod
+        def phash(img: Image.Image) -> _FallbackHash:
+            gray = _resize_gray(img, (8, 8))
+            return _FallbackHash(_mean_bits(gray))
+
+        @staticmethod
+        def dhash(img: Image.Image) -> _FallbackHash:
+            gray = _resize_gray(img, (9, 8))
+            diff = gray[:, 1:] > gray[:, :-1]
+            return _FallbackHash(diff)
+
+        @staticmethod
+        def whash(img: Image.Image) -> _FallbackHash:
+            gray = _resize_gray(img, (8, 8))
+            softened = (gray * 0.75) + (gray.mean() * 0.25)
+            return _FallbackHash(_mean_bits(softened))
+
+        @staticmethod
+        def colorhash(img: Image.Image) -> _FallbackHash:
+            rgb = np.asarray(ImageOps.exif_transpose(img).convert("RGB").resize((8, 8), Image.Resampling.LANCZOS), dtype=np.float32)
+            channel_means = rgb.mean(axis=(0, 1))
+            bits = np.array(
+                [
+                    channel_means[0] > 96.0,
+                    channel_means[0] > 160.0,
+                    channel_means[1] > 96.0,
+                    channel_means[1] > 160.0,
+                    channel_means[2] > 96.0,
+                    channel_means[2] > 160.0,
+                    channel_means.mean() > 96.0,
+                    channel_means.mean() > 160.0,
+                ],
+                dtype=bool,
+            )
+            return _FallbackHash(bits)
+
+        @staticmethod
+        def crop_resistant_hash(img: Image.Image) -> _FallbackCropHash:
+            gray = _resize_gray(img, (8, 8))
+            return _FallbackCropHash(_mean_bits(gray))
+
+    imagehash = _FallbackImageHashModule()
 
 try:
     import faiss  # type: ignore
@@ -87,8 +163,6 @@ def _crop_resistant_similarity(left: object, right: object) -> float:
 
 
 def _preview_hash_bundle(path: Path) -> Dict[str, object]:
-    if imagehash is None:
-        raise RuntimeError("imagehash is required for duplicate detection")
     img = _load_image_for_hash(path)
     bundle: Dict[str, object] = {
         "phash": imagehash.phash(img),

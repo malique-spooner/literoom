@@ -24,11 +24,14 @@ except Exception:
 class ReviewUiTests(unittest.TestCase):
     @staticmethod
     def _write_config(config_path: Path, db_path: Path, managed: Path, derived: Path, root: Path):
+        import_dir = root / "imports"
+        import_dir.mkdir(exist_ok=True)
         config_path.write_text(
             "\n".join(
                 [
                     "workspace_root: .",
-                    "sources: []",
+                    "sources:",
+                    f"  - {import_dir}",
                     "paths:",
                     f"  db_path: {db_path}",
                     f"  managed_library_dir: {managed}",

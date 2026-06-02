@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
 from math import log, pi, radians, tan
@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
     HTTPException = Query = None  # type: ignore[assignment]
     FileResponse = HTMLResponse = RedirectResponse = Response = None  # type: ignore[assignment]
 
-from .config import DEFAULT_CONFIG_PATH, AppConfig, load_config, save_config
+from .config import DEFAULT_CONFIG_PATH, DEFAULT_WORKSPACE_ROOT, AppConfig, load_config, save_config
 from . import intelligence
 from .derivatives import _build_image_thumbnail
 from .metadata import manifest
@@ -2875,6 +2875,20 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 raise
         return current_config, resolved, current_db_path, current_managed
 
+    def _needs_first_run_setup(current_config: AppConfig) -> bool:
+        return not current_config.sources
+
+    def _setup_workspace_root(current_config: AppConfig, resolved: Path) -> Path:
+        if _needs_first_run_setup(current_config) and DEFAULT_WORKSPACE_ROOT.exists():
+            return DEFAULT_WORKSPACE_ROOT.resolve()
+        return current_config.resolve_root(resolved)
+
+    def _rooted_path(root: Path, raw_value: str) -> str:
+        path = Path(raw_value)
+        if path.is_absolute():
+            return str(path.resolve())
+        return str((root / path).resolve())
+
     def _render_dashboard(current_config: AppConfig, db_path: Path, resolved: Path, message: Optional[str] = None) -> str:
         overview = manifest.get_overview(db_path)
         metadata_overview = manifest.get_metadata_overview(db_path)
@@ -3424,6 +3438,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         resolved: Path,
         message: Optional[str] = None,
         *,
+        show_run_now: bool = True,
         page_title: str = "System",
         page_heading: str = "System",
     ) -> str:
@@ -3436,12 +3451,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         sources_text = "\n".join(current_config.sources)
         live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
-        workspace_root_value = str(current_config.resolve_root(resolved))
-        import_dir_value = str((Path(workspace_root_value) / "imports").resolve())
-        managed_library_dir_value = str(current_config.managed_library_dir(resolved))
-        derivatives_dir_value = str(current_config.derivatives_dir(resolved))
-        logs_dir_value = str(current_config.logs_dir(resolved))
-        temp_dir_value = str(current_config.temp_dir(resolved))
+        workspace_root_path = _setup_workspace_root(current_config, resolved)
+        workspace_root_value = str(workspace_root_path)
+        import_dir_value = str((workspace_root_path / "imports").resolve())
+        managed_library_dir_value = _rooted_path(workspace_root_path, current_config.paths.managed_library_dir)
+        derivatives_dir_value = _rooted_path(workspace_root_path, current_config.paths.derivatives_dir)
+        logs_dir_value = _rooted_path(workspace_root_path, current_config.paths.logs_dir)
+        temp_dir_value = _rooted_path(workspace_root_path, current_config.paths.temp_dir)
+        db_path_value = _rooted_path(workspace_root_path, current_config.paths.db_path)
         stack_groups_html = "".join(
             f"""
             <section class="stack-group">
@@ -3461,9 +3478,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <div class="title">
             <h1>{escape(page_heading)}</h1>
           </div>
-          <div class="button-row">
-            <a class="btn secondary" href="/app/actions/run-now">Run ingest now</a>
-          </div>
+          {f'<div class="button-row"><a class="btn secondary" href="/app/actions/run-now">Run ingest now</a></div>' if show_run_now else ''}
         </div>
         {flash}
         <section class="system-stack">
@@ -3500,13 +3515,13 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               <p>Choose where imports land and where Literoom builds the library tree.</p>
             </div>
             <form method="get" action="/app/settings/save" id="settings-form" data-auto-submit="true">
-              <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(current_config.workspace_root)}">
+              <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(workspace_root_value)}">
               <input type="hidden" name="sources_text" id="sources_text" value="{escape(sources_text)}">
-              <input type="hidden" name="db_path_value" value="{escape(current_config.paths.db_path)}">
-              <input type="hidden" name="managed_library_dir_value" id="managed_library_dir_value" value="{escape(current_config.paths.managed_library_dir)}">
-              <input type="hidden" name="derivatives_dir_value" id="derivatives_dir_value" value="{escape(current_config.paths.derivatives_dir)}">
-              <input type="hidden" name="logs_dir_value" value="{escape(current_config.paths.logs_dir)}">
-              <input type="hidden" name="temp_dir_value" value="{escape(current_config.paths.temp_dir)}">
+              <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
+              <input type="hidden" name="managed_library_dir_value" id="managed_library_dir_value" value="{escape(managed_library_dir_value)}">
+              <input type="hidden" name="derivatives_dir_value" id="derivatives_dir_value" value="{escape(derivatives_dir_value)}">
+              <input type="hidden" name="logs_dir_value" value="{escape(logs_dir_value)}">
+              <input type="hidden" name="temp_dir_value" value="{escape(temp_dir_value)}">
               <label class="field" style="grid-column:1 / -1; margin-bottom:24px;">
                 <span>Import folder</span>
                 <div class="import-picker">
@@ -3556,8 +3571,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             const form = document.getElementById('settings-form');
             if (!chooser || !picker || !libraryChooser || !libraryPicker || !field || !label || !libraryField || !libraryLabel || !form) return;
             const prettyPath = (folderName) => {
-              const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\/+$/, '');
-              const clean = String(folderName || '').replace(/^\/+/, '');
+              const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\\/+$/, '');
+              const clean = String(folderName || '').replace(/^\\/+/, '');
               if (!clean) return root;
               if (!root) return clean;
               return `${root}/${clean}`;
@@ -3619,10 +3634,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 sources=current_config.resolved_sources(resolved),
             )
             auto_sync_state["last_result"] = result
-            auto_sync_state["last_run_at"] = datetime.utcnow().isoformat(timespec="seconds")
+            auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         except Exception as exc:  # pragma: no cover
             auto_sync_state["last_error"] = str(exc)
-            auto_sync_state["last_run_at"] = datetime.utcnow().isoformat(timespec="seconds")
+            auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         finally:
             auto_sync_state["running"] = False
             auto_sync_lock.release()
@@ -4090,6 +4105,17 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def dashboard(message: Optional[str] = None):
         current_config, resolved, db_path, _managed = _current_config()
+        if _needs_first_run_setup(current_config):
+            setup_message = message or "Choose your workspace and import folders to get started."
+            return _render_system_page(
+                current_config,
+                db_path,
+                resolved,
+                setup_message,
+                show_run_now=False,
+                page_title="Welcome to Literoom",
+                page_heading="Choose your folders to begin",
+            )
         return _render_dashboard(current_config, db_path, resolved, message)
 
     @app.get("/app/system", response_class=HTMLResponse)

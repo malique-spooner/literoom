@@ -35,7 +35,6 @@ CLUSTER_MERGE_COHESION_DROP_LIMIT = 0.16
 CLUSTER_MERGE_HIGH_CONFIDENCE_FLOOR = 0.80
 CLUSTER_MERGE_HIGH_CONFIDENCE_PAIR_FLOOR = 0.88
 CLUSTER_MERGE_HIGH_CONFIDENCE_TOP_MEAN_FLOOR = 0.79
-FALLBACK_FACE_MODELS = {"opencv_haar_clustered", "haar", "opencv_haar"}
 
 
 class FaceRecognitionQualityError(RuntimeError):
@@ -103,20 +102,13 @@ def _insightface_app(model_name: str):
     return app
 
 
-def _use_insightface(model_name: Optional[str]) -> bool:
-    if not model_name:
-        return False
-    normalized = model_name.strip().lower()
-    return normalized not in FALLBACK_FACE_MODELS
-
-
 def _ensure_insightface_ready(model_name: str) -> None:
     try:
         from insightface.app import FaceAnalysis  # noqa: F401
     except Exception as exc:  # pragma: no cover - dependency environment specific
         raise FaceRecognitionQualityError(
             f"InsightFace is required for face recognition quality with model '{model_name}'. "
-            "Install the 'insightface' Python package or switch to an explicit fallback model for low-quality detection-only runs."
+            "Install the 'insightface' Python package to enable face detection."
         ) from exc
 
 
@@ -914,14 +906,8 @@ def detect_faces(
     force: bool = False,
     face_model: Optional[str] = None,
 ) -> Dict[str, int]:
-    try:
-        _cv2()
-    except RuntimeError:
-        return {"processed": 0, "detected": 0, "failed": 0, "embedded": 0, "assigned": 0, "clusters_created": 0}
-    use_insightface = _use_insightface(face_model)
     active_model = (face_model or "antelopev2").strip() if face_model else "antelopev2"
-    if use_insightface:
-        _ensure_insightface_ready(active_model)
+    _ensure_insightface_ready(active_model)
     processed = detected = failed = embedded = 0
     for asset in manifest.iter_assets_for_face_detection(db_path=db_path, limit=limit, include_existing=force):
         processed += 1
@@ -950,35 +936,7 @@ def detect_faces(
                 image = cv2.imread(candidate_path)
                 if image is None:
                     continue
-                image_detections: List[Dict[str, object]] = []
-                candidate_model_name = "opencv_haar_clustered"
-                if use_insightface:
-                    image_detections = _insightface_detections(image, model_name=active_model)
-                    if image_detections:
-                        candidate_model_name = f"insightface_{active_model}"
-                if not image_detections and not use_insightface:
-                    for x, y, w, h in _detect_boxes(image):
-                        if any(_iou((x, y, w, h), existing) > 0.7 for existing in seen_boxes):
-                            continue
-                        crop = image[max(0, y): max(0, y + h), max(0, x): max(0, x + w)]
-                        quality = _face_quality(crop)
-                        if quality < 35:
-                            continue
-                        image_detections.append(
-                            {
-                                "bbox": {
-                                    "x": int(x),
-                                    "y": int(y),
-                                    "w": int(w),
-                                    "h": int(h),
-                                    "image_width": int(image.shape[1]),
-                                    "image_height": int(image.shape[0]),
-                                    "quality": round(quality, 2),
-                                },
-                                "embedding_vector": _compute_embedding(crop),
-                                "embedding_model_name": candidate_model_name,
-                            }
-                        )
+                image_detections = _insightface_detections(image, model_name=active_model)
                 for detection in image_detections:
                     bbox = detection["bbox"]
                     x = int(bbox["x"])
@@ -995,7 +953,7 @@ def detect_faces(
                             "bbox": bbox,
                             "frame_time_ms": candidate_frame_ms,
                             "embedding_vector": detection["embedding_vector"],
-                            "embedding_model_name": detection.get("embedding_model_name") or candidate_model_name,
+                            "embedding_model_name": detection.get("embedding_model_name") or f"insightface_{active_model}",
                         }
                     )
         finally:
@@ -1004,7 +962,7 @@ def detect_faces(
                     temp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-        source_name = f"insightface_{active_model}" if use_insightface else "opencv_haar_clustered"
+        source_name = f"insightface_{active_model}"
         count = manifest.replace_faces_for_asset(db_path, asset["id"], detections, source_name=source_name)
         detected += count
         for detection in detections:

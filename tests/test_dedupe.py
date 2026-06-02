@@ -9,6 +9,7 @@ from unittest import mock
 from PIL import Image, ImageDraw
 
 from literoom import dedupe
+from literoom.config import DEFAULT_WORKSPACE_ROOT
 from literoom.metadata import manifest
 
 try:
@@ -89,6 +90,31 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(result["groups"], 1)
             self.assertEqual(len(groups), 1)
             self.assertEqual(len(items), 2)
+
+    def test_first_run_shows_setup_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            managed.mkdir()
+            derived.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            self._write_config(config_path, db_path, managed, derived, root)
+            client = TestClient(create_app(config_path))
+
+            page = client.get("/")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Welcome to Literoom", page.text)
+            self.assertIn("Choose your folders to begin", page.text)
+            self.assertIn("Choose import folder", page.text)
+            self.assertIn("Choose library folder", page.text)
+            if DEFAULT_WORKSPACE_ROOT.exists():
+                self.assertIn(str(DEFAULT_WORKSPACE_ROOT.resolve()), page.text)
+            self.assertNotIn("Run ingest now", page.text)
+            self.assertNotIn("We keep this love in a photograph", page.text)
 
     def test_duplicate_group_can_be_resolved_via_app(self):
         with tempfile.TemporaryDirectory() as tmp:
