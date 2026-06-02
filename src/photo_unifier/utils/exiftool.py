@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional
@@ -10,7 +10,6 @@ import json
 
 from .location import parse_location_candidate
 
-# Common video extensions for conditional tagging
 VIDEO_EXTS = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".m2ts", ".3gp", ".mkv"}
 
 def _find_exiftool(exiftool_path: Optional[Path]) -> Optional[str]:
@@ -23,14 +22,11 @@ def _find_exiftool(exiftool_path: Optional[Path]) -> Optional[str]:
     found = shutil.which("exiftool")
     return found
 
-# -----------------------------
-# Write metadata with exiftool
-# -----------------------------
 def write_fields(
     file_path: Path,
     fields: Dict[str, Any],
     exiftool_path: Optional[Path] = None,
-    backup_ext: str = ".bak",  # unused, we overwrite original
+    backup_ext: str = ".bak",
 ) -> Tuple[bool, str]:
     """
     Write common metadata into images/videos using exiftool.
@@ -119,9 +115,6 @@ def write_fields(
 
     return ok, ver
 
-# -----------------------------
-# Read “Date Taken” (batch) - optional fallback
-# -----------------------------
 def _normalize_exif_dt(s: str) -> str:
     s = s.strip()
     m = re.match(r"(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})", s)

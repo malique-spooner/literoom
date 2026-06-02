@@ -94,7 +94,10 @@ def _confirmed_auto_assign_threshold(
     base_threshold: float = PERSON_AUTO_ASSIGN_THRESHOLD,
 ) -> float:
     profile_size = max(face_count, len(vectors))
-    return max(PERSON_AUTO_ASSIGN_MIN_THRESHOLD, base_threshold - max(0, profile_size - 5) * PERSON_AUTO_ASSIGN_STEP)
+    # Small confirmed profiles should stay cautious, while stronger profiles
+    # can relax enough to absorb obvious matches automatically.
+    threshold = base_threshold + 0.03 - max(0, profile_size - 1) * 0.02
+    return max(PERSON_AUTO_ASSIGN_MIN_THRESHOLD, min(0.98, threshold))
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -3852,6 +3855,7 @@ def refresh_confirmed_identity_matches(
         ).fetchall()
 
         assigned = 0
+        clarified = 0
         touched_assets: set[str] = set()
         label = str(identity.get("label") or "")
         resolved_at = utcnow_iso()
@@ -3864,7 +3868,34 @@ def refresh_confirmed_identity_matches(
             if not vector:
                 continue
             score = _cosine_similarity(vector, centroid)
+            if score < PERSON_CANDIDATE_CLARIFICATION_THRESHOLD:
+                continue
             if score < adaptive_auto_assign_threshold:
+                con.execute(
+                    """
+                    INSERT INTO face_clarifications (
+                      face_id, suggested_identity_id, suggested_label, score, rationale, status, created_at, resolved_at
+                    ) VALUES (?, ?, ?, ?, ?, 'OPEN', ?, NULL)
+                    ON CONFLICT(face_id) DO UPDATE SET
+                      suggested_identity_id=excluded.suggested_identity_id,
+                      suggested_label=excluded.suggested_label,
+                      score=excluded.score,
+                      rationale=excluded.rationale,
+                      status='OPEN',
+                      created_at=excluded.created_at,
+                      resolved_at=NULL
+                    """,
+                    (
+                        row["face_id"],
+                        identity_id,
+                        label,
+                        score,
+                        "confirmed identity candidate",
+                        utcnow_iso(),
+                    ),
+                )
+                con.execute("UPDATE faces SET status='REVIEW' WHERE id=?", (row["face_id"],))
+                clarified += 1
                 continue
             con.execute(
                 "UPDATE faces SET identity_id=?, status='LABELED' WHERE id=?",
@@ -3884,7 +3915,7 @@ def refresh_confirmed_identity_matches(
     finally:
         con.close()
 
-    return {"assigned": assigned, "clarified": 0}
+    return {"assigned": assigned, "clarified": clarified}
 
 
 def prepare_face_rerun(db_path: Path) -> Dict[str, Any]:

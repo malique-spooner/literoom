@@ -150,6 +150,55 @@ class IntelligenceTests(unittest.TestCase):
             self.assertGreaterEqual(report["count"], 2)
             self.assertEqual(report["items"][0]["orig_filename"], "favorite.jpg")
 
+    def test_semantic_search_uses_people_and_location_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            manifest.init_db(db_path)
+
+            rows = []
+            for name in ["plain.jpg", "tagged.jpg"]:
+                source = root / name
+                Image.new("RGB", (120, 120), color="white").save(source)
+                rows.append(
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-01-01T12:00:00",
+                        "src_mtime": "2024-01-01T12:00:00",
+                    }
+                )
+            manifest.upsert_raw(rows, db_path)
+            assets = {row["orig_filename"]: row for row in manifest.list_assets(db_path, limit=10)}
+
+            manifest.apply_metadata_updates(db_path, assets["tagged.jpg"]["id"], people=["Avery", "Jordan"], source_name="manual")
+            manifest.set_metadata_field(
+                db_path,
+                assets["tagged.jpg"]["id"],
+                field_name="location",
+                value="London Bridge, London",
+                source_name="manual",
+                source_field="Location",
+                is_canonical=True,
+                confidence=0.98,
+            )
+
+            report_people = intelligence.search_assets_semantic(db_path, "Avery")
+            self.assertGreaterEqual(report_people["count"], 1)
+            self.assertEqual(report_people["items"][0]["orig_filename"], "tagged.jpg")
+
+            report_location = intelligence.search_assets_semantic(db_path, "London Bridge")
+            self.assertGreaterEqual(report_location["count"], 1)
+            self.assertEqual(report_location["items"][0]["orig_filename"], "tagged.jpg")
+
     def test_near_confident_face_match_stays_unassigned_for_small_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

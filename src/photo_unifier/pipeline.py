@@ -5,6 +5,7 @@ from typing import Optional, Sequence
 
 from .config import DEFAULT_CONFIG_PATH, load_config
 from .derivatives import build_derivatives
+from .export import export_built_assets
 from . import intelligence
 from .metadata_repair import repair_metadata
 from . import dedupe
@@ -199,6 +200,41 @@ def run_content_extraction(config_path: Path | str = DEFAULT_CONFIG_PATH, *, lim
         return _complete_job(db_path, job_id, "content_extraction", {"job_id": job_id, **result})
     except Exception as exc:
         _fail_job(db_path, job_id, "content_extraction", exc, metrics={"limit": limit})
+        raise
+
+
+def run_export_library(
+    config_path: Path | str = DEFAULT_CONFIG_PATH,
+    *,
+    destination: Path | str,
+    limit: Optional[int] = None,
+    overwrite: bool = False,
+) -> dict:
+    config, resolved, db_path = load_runtime(config_path)
+    destination_dir = Path(destination).expanduser().resolve()
+    job_id = manifest.create_job(
+        db_path,
+        "export_library",
+        {"destination": str(destination_dir), "limit": limit, "overwrite": overwrite},
+    )
+    manifest.start_job(db_path, job_id)
+    try:
+        result = export_built_assets(
+            db_path=db_path,
+            managed_library_dir=config.managed_library_dir(resolved),
+            destination_dir=destination_dir,
+            limit=limit,
+            overwrite=overwrite,
+        )
+        return _complete_job(db_path, job_id, "export_library", {"job_id": job_id, **result})
+    except Exception as exc:
+        _fail_job(
+            db_path,
+            job_id,
+            "export_library",
+            exc,
+            metrics={"destination": str(destination_dir), "limit": limit, "overwrite": overwrite},
+        )
         raise
 
 

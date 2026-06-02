@@ -2,18 +2,26 @@
 
 Photo Unifier is a local-first media archive pipeline and local web app. It ingests photos and videos from folders, drives, and ZIP takeouts into a SQLite-backed catalog, plans a clean library, copies canonical assets without touching originals, repairs metadata, prepares previews, and exposes review workflows through a local browser UI.
 
+The intended operating model is:
+
+1. keep raw imports untouched on the external drive
+2. ingest them into the catalog
+3. build a clean managed library
+4. export that managed library to Apple Photos, Google Photos, or a backup destination
+
 ## Current Snapshot
 
 The project now has a cleaner separation between code and media:
 
 - Code lives in `/Users/maliquespooner/Desktop/Coding/photo-unifier`
 - Media and runtime data live on the external drive under `/Volumes/Extreme SSD/MSp/Photo Unifier`
-- The external drive layout is:
+- The external drive workspace resolves these relative paths:
   - `imports/` for new media
   - `library/` for the organized final copies
   - `previews/` for thumbnails and video stills
   - `logs/` for run logs
   - `tmp/` for temporary files
+- In other words, those folders live under `/Volumes/Extreme SSD/MSp/Photo Unifier`, not in the code checkout
 - The SQLite database still lives under `.photo_unifier/manifest.sqlite`
 - The old SSD code tree has been removed, so the Desktop repo is the source of truth
 - The `src` tree is simplified around `metadata/`, `faces.py`, `dedupe.py`, and `utils/` instead of the old `phase_*` naming
@@ -90,6 +98,7 @@ That approach matters most for time, GPS, and people data, where false positives
    ./.venv/bin/python -m photo_unifier.cli build-library
    ./.venv/bin/python -m photo_unifier.cli build-previews
    ./.venv/bin/python -m photo_unifier.cli extract-content
+   ./.venv/bin/python -m photo_unifier.cli export-library /path/to/export
    ```
 
 5. Inspect status:
@@ -163,11 +172,12 @@ The config controls:
 
 ## Current Gaps
 
-This repo now has a working ingest/library/review foundation, and the intelligence layer is now implemented. The remaining work is mostly in review polish, release hardening, and deeper UX refinement:
+This repo now has a working ingest/library/review foundation, and the intelligence layer is now implemented. The remaining work is mostly in release hardening, export polish, and deeper UX refinement:
 
 - a more polished Apple/Google-Photos-style browsing experience
 - richer review workflows for duplicates, people, and cleanup queues
 - additional smoke tests and pilot validation on large real libraries
 - more enrichment support for the locked media stack when packages are installed
+- export presets for Apple Photos upload and cloud backup targets
 
 The remaining work is now primarily polish and operational hardening rather than core intelligence gaps.

@@ -18,6 +18,7 @@ from .pipeline import (
     run_dedupe_exact,
     run_dedupe_near,
     run_content_extraction,
+    run_export_library,
     run_face_detection,
     run_ingest,
     run_metadata_repair,
@@ -163,6 +164,23 @@ def extract_content_cmd(config_path: Path, limit: Optional[int]):
             f"transcripts={result['transcript_saved']} text_embeddings={result['text_saved']} "
             f"visual_embeddings={result['visual_saved']}"
         )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@app.command("export-library")
+@click.argument("destination", type=click.Path(path_type=Path))
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--limit", default=None, type=int)
+@click.option("--overwrite/--no-overwrite", default=False, show_default=True)
+def export_library_cmd(config_path: Path, destination: Path, limit: Optional[int], overwrite: bool):
+    try:
+        result = run_export_library(config_path, destination=destination, limit=limit, overwrite=overwrite)
+        click.echo(
+            f"Exported={result['exported']} skipped={result['skipped']} "
+            f"missing={result['missing']} failed={result['failed']}"
+        )
+        click.echo(f"Manifest: {result['manifest_path']}")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 

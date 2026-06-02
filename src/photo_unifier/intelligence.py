@@ -107,6 +107,13 @@ def _read_text_asset_rows(db_path: Path) -> list[dict[str, Any]]:
                      FROM extraction_results er
                      WHERE er.asset_id = a.id AND er.status = 'READY'
                    ), '') AS extracted_text
+                   ,COALESCE((
+                     SELECT group_concat(mf.value_text, ' ')
+                     FROM metadata_fields mf
+                     WHERE mf.asset_id = a.id
+                       AND mf.field_name = 'location'
+                       AND COALESCE(mf.value_text, '') <> ''
+                   ), '') AS location_text
             FROM assets a
             LEFT JOIN managed_assets m ON m.asset_id = a.id
             ORDER BY a.dt_original DESC, a.id DESC
@@ -215,6 +222,7 @@ def _asset_text_profile(asset: dict[str, Any], extraction_rows: list[dict[str, A
         asset.get("orig_filename"),
         asset.get("title"),
         asset.get("description"),
+        asset.get("location_text"),
         asset.get("people_json"),
         asset.get("keywords_json"),
         asset.get("face_labels"),
@@ -243,7 +251,11 @@ def index_asset_embeddings(
         if not asset:
             continue
         extraction_rows = manifest.list_extraction_results(db_path, row["id"])
-        search_blob = _asset_text_profile({**asset, **row}, extraction_rows)
+        metadata_rows = manifest.list_asset_metadata(db_path, row["id"])
+        search_blob = _asset_text_profile(
+            {**asset, **row, "location_text": _location_text_from_metadata_rows(metadata_rows)},
+            extraction_rows,
+        )
         manifest.replace_embedding(
             db_path,
             asset_id=row["id"],
@@ -376,6 +388,7 @@ def _asset_search_text(row: dict[str, Any]) -> str:
         row.get("orig_filename"),
         row.get("title"),
         row.get("description"),
+        row.get("location_text"),
         keywords,
         people,
         row.get("face_labels"),
@@ -385,6 +398,17 @@ def _asset_search_text(row: dict[str, Any]) -> str:
         row.get("source_kind"),
         row.get("media_type"),
     )
+
+
+def _location_text_from_metadata_rows(metadata_rows: list[dict[str, Any]]) -> str:
+    location_parts: list[str] = []
+    for row in metadata_rows:
+        if row.get("field_name") != "location":
+            continue
+        value = row.get("value")
+        if isinstance(value, str) and value.strip():
+            location_parts.append(value.strip())
+    return " ".join(location_parts).strip()
 
 
 def search_assets_semantic(
@@ -407,6 +431,13 @@ def search_assets_semantic(
             SELECT a.id, a.source, a.source_kind, a.media_type, a.orig_filename, a.dt_original,
                    a.title, a.description, a.keywords_json, a.people_json, a.gps_lat, a.gps_lon,
                    a.status, a.user_rating, a.review_state, a.review_score, a.favorite, m.managed_path,
+                   COALESCE((
+                     SELECT group_concat(mf.value_text, ' ')
+                     FROM metadata_fields mf
+                     WHERE mf.asset_id = a.id
+                       AND mf.field_name = 'location'
+                       AND COALESCE(mf.value_text, '') <> ''
+                   ), '') AS location_text,
                    COALESCE((
                      SELECT group_concat(i.label, ' ')
                      FROM faces f
@@ -446,6 +477,10 @@ def search_assets_semantic(
                 continue
             text_blob = _asset_search_text(row)
             tokens = set(_tokenize(text_blob))
+            people_text = _clean_text(row.get("people_json"), row.get("face_labels"))
+            location_text = _clean_text(row.get("location_text"))
+            people_tokens = set(_tokenize(people_text))
+            location_tokens = set(_tokenize(location_text))
             score = 0.0
             reasons: list[str] = []
             stored_text_vec = embedding_map.get((row["id"], "asset_text")) or text_embedding(text_blob)
@@ -457,11 +492,16 @@ def search_assets_semantic(
                     reasons.append(f"text={text_similarity:.2f}")
                 if token_overlap > 0:
                     reasons.append(f"tokens={token_overlap:.2f}")
-                if q_tokens & set(_tokenize(_clean_text(row.get("people_json"), row.get("face_labels")))):
-                    score += 0.18
+                people_overlap = len(q_tokens & people_tokens) / max(1, len(q_tokens))
+                if people_overlap > 0:
+                    score += 0.32 + people_overlap * 0.28
                     reasons.append("people match")
+                location_overlap = len(q_tokens & location_tokens) / max(1, len(q_tokens))
+                if location_overlap > 0:
+                    score += 0.28 + location_overlap * 0.24
+                    reasons.append("location match")
                 if row.get("extracted_text") and q_tokens & set(_tokenize(str(row.get("extracted_text")))):
-                    score += 0.12
+                    score += 0.14
                     reasons.append("ocr/transcript match")
             if ref_text_vec is not None:
                 ref_text_score = _cosine(ref_text_vec, stored_text_vec)
@@ -478,8 +518,8 @@ def search_assets_semantic(
             if row.get("dt_original") and q and row["dt_original"][:10] in q:
                 score += 0.05
                 reasons.append("date match")
-            if row.get("gps_lat") is not None and row.get("gps_lon") is not None and q_tokens & {"photo", "map", "location", "where"}:
-                score += 0.03
+            if row.get("gps_lat") is not None and row.get("gps_lon") is not None and q_tokens & {"photo", "map", "location", "where", "place", "places"}:
+                score += 0.05
                 reasons.append("location present")
             if row.get("user_rating"):
                 rating_boost = min(0.12, float(row["user_rating"]) * 0.02)

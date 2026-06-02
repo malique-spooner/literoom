@@ -16,6 +16,7 @@ The project is "done" when the following are true in a fresh checkout:
 - `python -m photo_unifier.cli dedupe-exact` and `dedupe-near` both work on real sample data
 - `python -m photo_unifier.cli detect-faces` works on sample media and review actions behave correctly
 - `python -m photo_unifier.cli audit` produces a useful report
+- `python -m photo_unifier.cli export-library` produces a clean export tree for upload or backup
 - the browser UI supports the main review flows without workarounds
 - the test suite passes in a standard local dev setup
 - the README matches the actual commands and prerequisites
@@ -212,6 +213,7 @@ That order reduces rework because the data model, ingest flow, and local setup a
 - speech or transcription extraction works for video
 - semantic ranking or embedding-based search exists
 - the UI has good filters, keyboard shortcuts, and batch actions for review
+- export paths for Apple Photos and cloud backup are documented and repeatable
 - ranking metadata is persisted on assets and can be used to drive smart albums or review ordering
 - failures are easy to diagnose from job/status output
 - README instructions match actual commands
