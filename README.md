@@ -134,10 +134,9 @@ make package
 That produces:
 
 - `dist/Literoom.app`
-- `dist/Literoom.dmg` when the host can create disk images
-- `dist/Literoom.zip` as a fallback archive when DMG creation is unavailable
+- `dist/Literoom.zip`
 
-The DMG is the preferred installable artifact for a GitHub release, and the ZIP fallback still gives you a clean download if the environment can’t create a disk image.
+The ZIP is the release artifact you can upload to GitHub and hand off directly to someone else.
 
 ## Project Status
 

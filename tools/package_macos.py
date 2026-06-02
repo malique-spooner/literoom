@@ -12,7 +12,10 @@ DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 APP_NAME = "Literoom"
 APP_BUNDLE = DIST / f"{APP_NAME}.app"
-STAGING = DIST / "_dmg_staging"
+ZIP_PATH = DIST / f"{APP_NAME}.zip"
+LEGACY_COLLECT = DIST / APP_NAME
+LEGACY_STAGING = DIST / "_dmg_staging"
+DS_STORE = DIST / ".DS_Store"
 PYINSTALLER_CONFIG_DIR = Path("/private/tmp/literoom-pyinstaller")
 
 
@@ -57,51 +60,23 @@ def build_app() -> None:
     _run(cmd)
 
 
-def build_dmg() -> Path:
-    _clean([STAGING])
-    STAGING.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(APP_BUNDLE, STAGING / APP_BUNDLE.name)
-    applications_link = STAGING / "Applications"
-    if applications_link.exists() or applications_link.is_symlink():
-        applications_link.unlink()
-    applications_link.symlink_to("/Applications")
-    dmg_path = DIST / f"{APP_NAME}.dmg"
-    if dmg_path.exists():
-        dmg_path.unlink()
-    try:
-        _run([
-            "/usr/bin/hdiutil",
-            "create",
-            "-volname",
-            APP_NAME,
-            "-srcfolder",
-            str(STAGING),
-            "-ov",
-            "-format",
-            "UDZO",
-            str(dmg_path),
-        ])
-        return dmg_path
-    except subprocess.CalledProcessError:
-        zip_path = DIST / f"{APP_NAME}.zip"
-        if zip_path.exists():
-            zip_path.unlink()
-        shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=DIST, base_dir=APP_BUNDLE.name)
-        return zip_path
+def build_zip() -> Path:
+    if ZIP_PATH.exists():
+        ZIP_PATH.unlink()
+    shutil.make_archive(str(ZIP_PATH.with_suffix("")), "zip", root_dir=DIST, base_dir=APP_BUNDLE.name)
+    return ZIP_PATH
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the Literoom macOS app bundle and DMG.")
-    parser.add_argument("--skip-dmg", action="store_true", help="Build only the .app bundle.")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Build the Literoom macOS app bundle and zip archive.")
+    parser.parse_args()
 
-    _clean([BUILD, APP_BUNDLE, STAGING, DIST / f"{APP_NAME}.dmg"])
+    _clean([BUILD, APP_BUNDLE, ZIP_PATH, LEGACY_COLLECT, LEGACY_STAGING, DIST / f"{APP_NAME}.dmg", DS_STORE])
     build_app()
-    if not args.skip_dmg:
-        artifact = build_dmg()
+    artifact = build_zip()
+    _clean([LEGACY_COLLECT, DS_STORE])
     print(f"Built {APP_BUNDLE}")
-    if not args.skip_dmg:
-        print(f"Built {artifact}")
+    print(f"Built {artifact}")
 
 
 if __name__ == "__main__":
