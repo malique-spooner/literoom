@@ -125,7 +125,7 @@ The current suite covers:
 
 ## Packaging
 
-Build the macOS app bundle and installer image with:
+Build the macOS app bundle and ZIP with:
 
 ```bash
 make package
@@ -136,7 +136,7 @@ That produces:
 - `dist/Literoom.app`
 - `dist/Literoom.zip`
 
-The ZIP is the release artifact you can upload to GitHub and hand off directly to someone else.
+The ZIP is the release artifact you can upload to GitHub and hand off directly to someone else. The app bundle is only an intermediate build output.
 
 ## Project Status
 

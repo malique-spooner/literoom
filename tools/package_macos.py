@@ -74,8 +74,7 @@ def main() -> None:
     _clean([BUILD, APP_BUNDLE, ZIP_PATH, LEGACY_COLLECT, LEGACY_STAGING, DIST / f"{APP_NAME}.dmg", DS_STORE])
     build_app()
     artifact = build_zip()
-    _clean([LEGACY_COLLECT, DS_STORE])
-    print(f"Built {APP_BUNDLE}")
+    _clean([APP_BUNDLE, LEGACY_COLLECT, DS_STORE])
     print(f"Built {artifact}")
 
 
