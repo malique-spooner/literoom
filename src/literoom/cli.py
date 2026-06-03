@@ -11,6 +11,8 @@ from .metadata import manifest
 from .metadata import master
 from .audit import build_audit_report, format_audit_report
 from .tooling import build_tool_stack_report, format_tool_stack_report
+from .updates import check_for_updates
+from .version import APP_VERSION
 from .pipeline import (
     load_runtime as _load_runtime,
     run_build_derivatives,
@@ -68,6 +70,21 @@ def doctor_cmd(config_path: Path):
         )
     if not report.get("required_ready", False):
         raise click.ClickException("Required media tools are missing.")
+
+
+@app.command("updates")
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+def updates_cmd(config_path: Path):
+    del config_path
+    status = check_for_updates()
+    click.echo(f"Literoom {APP_VERSION}")
+    click.echo(f"Installed: {status.current_version}")
+    click.echo(f"Latest: {status.latest_version or 'unknown'}")
+    click.echo(status.message)
+    if status.release_url:
+        click.echo(f"Release: {status.release_url}")
+    if status.download_url:
+        click.echo(f"Download: {status.download_url}")
 
 
 @app.command("jobs")

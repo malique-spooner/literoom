@@ -89,6 +89,8 @@ Then use:
 - Review
 - System
 
+The System page also includes a built-in update checker. It compares the installed app against the latest GitHub release and gives you a download link when a newer build is available.
+
 ## Configuration
 
 The default config file is `literoom.local.yaml`.
@@ -140,9 +142,15 @@ That produces:
 
 The ZIP is the release artifact you can upload to GitHub and hand off directly to someone else. The app bundle is only an intermediate build output.
 
+GitHub Releases are the versioned delivery channel for Literoom:
+
+- `main` stays the source of truth for code
+- each stable build is tagged and published as a release
+- users install the ZIP once and can check for newer releases from inside the app
+
 ## Project Status
 
-Literoom is actively being cleaned up for packaging and release. The core app is working, the test suite is in place, and the remaining work is focused on final release polish, desktop packaging, and packaged end-to-end validation.
+Literoom now has a stable desktop release flow and an in-app update checker. The core app is working, the test suite is in place, and the remaining work is focused on future release polish and feature work.
 
 See [`ROADMAP.md`](./ROADMAP.md) for the current milestone breakdown.
 
