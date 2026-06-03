@@ -59,12 +59,14 @@ literoom init-config
 literoom desktop
 ```
 
-On first launch, Literoom opens a setup screen if no import sources are configured yet. That screen is used to pick the workspace and import folder before ingest begins.
+On first launch, Literoom opens a setup screen if no import sources are configured yet. That screen is used to pick the workspace and paste or choose the real import folder before ingest begins. If the folder lives outside the workspace root, paste the absolute path directly.
 
 ### Common Commands
 
 ```bash
 literoom ingest /path/to/takeout.zip /path/to/media-folder
+literoom test-ingest /path/to/media-folder
+literoom analyze-imports /path/to/media-folder
 literoom plan-library
 literoom build-library
 literoom build-previews
@@ -90,6 +92,7 @@ Then use:
 - System
 
 The System page also includes a built-in update checker. It compares the installed app against the latest GitHub release and gives you a download link when a newer build is available.
+It also includes an import preflight card with an analysis summary and a 10-file test ingest so you can catch broken folder setup before running the full archive.
 
 ## Configuration
 
@@ -150,7 +153,7 @@ GitHub Releases are the versioned delivery channel for Literoom:
 
 ## Project Status
 
-Literoom now has a stable desktop release flow and an in-app update checker. The core app is working, the test suite is in place, and the remaining work is focused on future release polish and feature work.
+Literoom now has a stable desktop release flow, an in-app update checker, and a source preflight path for testing import setup before the full ingest. The core app is working, the test suite is in place, and the remaining work is focused on future release polish and feature work.
 
 See [`ROADMAP.md`](./ROADMAP.md) for the current milestone breakdown.
 

@@ -27,7 +27,7 @@ from .config import DEFAULT_CONFIG_PATH, DEFAULT_WORKSPACE_ROOT, AppConfig, load
 from . import intelligence
 from .derivatives import _build_image_thumbnail
 from .metadata import manifest
-from .pipeline import run_face_detection, run_ingest
+from .pipeline import run_face_detection, run_ingest, run_source_analysis
 from .updates import check_for_updates
 from .version import APP_VERSION
 from .utils.location import reverse_geocode_address
@@ -2901,6 +2901,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             return str(path.resolve())
         return str((root / path).resolve())
 
+    def _start_job_thread(job_name: str, runner):
+        worker = threading.Thread(target=runner, name=job_name, daemon=True)
+        worker.start()
+        return worker
+
     def _render_dashboard(current_config: AppConfig, db_path: Path, resolved: Path, message: Optional[str] = None) -> str:
         overview = manifest.get_overview(db_path)
         metadata_overview = manifest.get_metadata_overview(db_path)
@@ -3461,11 +3466,28 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         jobs = manifest.list_jobs(db_path, limit=6)
         tool_stack = build_tool_stack_report(current_config.tools)
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
-        sources_text = "\n".join(current_config.sources)
         live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
+        latest_analysis = next((row for row in jobs if row.get("job_type") == "source_analysis"), None)
+        analysis_metrics = _json_object(latest_analysis.get("metrics_json")) if latest_analysis else {}
+        analysis_summary_html = ""
+        if analysis_metrics:
+            repeated = analysis_metrics.get("repeated_basenames") or []
+            repeated_text = ", ".join(
+                f"{escape(str(item.get('name') or 'file'))} ({int(item.get('count') or 0):,})"
+                for item in repeated[:5]
+            )
+            issue_count = len(analysis_metrics.get("source_issues") or [])
+            analysis_summary_html = f"""
+              <div class="asset-meta">{int(analysis_metrics.get('media_files') or 0):,} media files seen</div>
+              <div class="asset-meta">{int(analysis_metrics.get('duplicate_basename_groups') or 0):,} filename groups repeat</div>
+              <div class="asset-meta">{int(analysis_metrics.get('duplicate_basename_items') or 0):,} extra filename matches</div>
+              {f'<div class="asset-meta">Common repeats: {repeated_text}</div>' if repeated_text else ''}
+              <div class="asset-meta">{issue_count:,} source issue{'s' if issue_count != 1 else ''} recorded</div>
+            """
         workspace_root_path = _setup_workspace_root(current_config, resolved)
         workspace_root_value = str(workspace_root_path)
         import_dir_value = str((workspace_root_path / "imports").resolve())
+        sources_text = "\n".join(current_config.sources) or import_dir_value
         managed_library_dir_value = _rooted_path(workspace_root_path, current_config.paths.managed_library_dir)
         derivatives_dir_value = _rooted_path(workspace_root_path, current_config.paths.derivatives_dir)
         logs_dir_value = _rooted_path(workspace_root_path, current_config.paths.logs_dir)
@@ -3528,6 +3550,20 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </section>
           <section class="card section">
             <div class="section-header">
+              <h2>Import preflight</h2>
+              <p>Run a tiny ingest test first, then inspect the source summary before you commit to the full archive.</p>
+            </div>
+            {analysis_summary_html or "<div class='asset-meta'>No analysis has been run yet. Literoom will show repeat file names and source issues after the first preflight.</div>"}
+            {f'''
+            <div class="button-row" style="margin-top:14px;">
+              <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Analyze imports</button></a>
+              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Test ingest (10 files)</button></a>
+            </div>
+            ''' if show_run_now else ''}
+            <div class="asset-meta" style="margin-top:10px;">The test ingest uses your configured source folders and stops after ten media files so setup problems surface fast.</div>
+          </section>
+          <section class="card section">
+            <div class="section-header">
               <h2>Stack</h2>
               <p>Locked Literoom tools and engines.</p>
             </div>
@@ -3538,11 +3574,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <section class="card section">
             <div class="section-header">
               <h2>Workspace</h2>
-              <p>Choose where imports land and where Literoom builds the library tree.</p>
+              <p>Choose the workspace and point Literoom at the real import folder. Paste a full path if the folder lives outside the workspace root.</p>
             </div>
             <form method="get" action="/app/settings/save" id="settings-form" data-auto-submit="true">
               <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(workspace_root_value)}">
-              <input type="hidden" name="sources_text" id="sources_text" value="{escape(sources_text)}">
+              <label class="field" style="grid-column:1 / -1; margin-bottom:18px;">
+                <span>Import folder path(s)</span>
+                <textarea name="sources_text" id="sources_text" rows="3" placeholder="/Volumes/Extreme SSD/MSp/literoom/imports">{escape(sources_text)}</textarea>
+              </label>
               <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
               <input type="hidden" name="managed_library_dir_value" id="managed_library_dir_value" value="{escape(managed_library_dir_value)}">
               <input type="hidden" name="derivatives_dir_value" id="derivatives_dir_value" value="{escape(derivatives_dir_value)}">
@@ -3647,7 +3686,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         """
         return _page(page_title, body, history_html=_history_sidebar_html(db_path))
 
-    def _run_ingest_background():
+    def _run_ingest_background(job_id: str, *, limit: Optional[int] = None):
         if not auto_sync_lock.acquire(blocking=False):
             return
         auto_sync_state["running"] = True
@@ -3658,6 +3697,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 config_path,
                 source_tag="manual",
                 sources=current_config.resolved_sources(resolved),
+                job_id=job_id,
+                limit=limit,
             )
             auto_sync_state["last_result"] = result
             auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -3668,21 +3709,62 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             auto_sync_state["running"] = False
             auto_sync_lock.release()
 
-    def _start_background(action_name: str):
-        current_config, resolved, _db_path, _managed = _current_config()
-        action_map = {
-            "run-now": lambda: _run_ingest_background(),
-            "detect-faces": lambda: run_face_detection(config_path, limit=max(25, min(int(current_config.pipeline.batch_size or 500), 1000)), force=True),
-            "toggle-auto": None,
-        }
-        if action_name not in action_map:
-            raise HTTPException(status_code=404, detail="Unknown action")
+    def _run_source_analysis_background(job_id: str, *, limit: Optional[int] = None):
+        try:
+            current_config, resolved, _db_path, _managed = _current_config()
+            result = run_source_analysis(
+                config_path,
+                source_tag="manual",
+                sources=current_config.resolved_sources(resolved),
+                limit=limit,
+                job_id=job_id,
+            )
+            auto_sync_state["last_result"] = result
+            auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        except Exception as exc:  # pragma: no cover
+            auto_sync_state["last_error"] = str(exc)
+            auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _start_background(action_name: str, *, limit: Optional[int] = None):
+        current_config, resolved, db_path, _managed = _current_config()
         if action_name == "toggle-auto":
             return
-        if action_name == "run-now" and not current_config.resolved_sources(resolved):
+        if action_name not in {"run-now", "test-ingest", "analyze-imports", "detect-faces"}:
+            raise HTTPException(status_code=404, detail="Unknown action")
+        if action_name in {"run-now", "test-ingest", "analyze-imports"} and not current_config.resolved_sources(resolved):
             raise ValueError("No ingest sources configured.")
-        worker = threading.Thread(target=action_map[action_name], daemon=True)
-        worker.start()
+        if action_name in {"run-now", "test-ingest"}:
+            job_id = manifest.create_job(
+                db_path,
+                "ingest",
+                {"sources": [str(p) for p in current_config.resolved_sources(resolved)], "limit": limit},
+            )
+            manifest.start_job(db_path, job_id)
+            _start_job_thread(
+                action_name,
+                lambda: _run_ingest_background(job_id, limit=limit),
+            )
+            return
+        if action_name == "analyze-imports":
+            job_id = manifest.create_job(
+                db_path,
+                "source_analysis",
+                {"sources": [str(p) for p in current_config.resolved_sources(resolved)], "limit": limit},
+            )
+            manifest.start_job(db_path, job_id)
+            _start_job_thread(
+                action_name,
+                lambda: _run_source_analysis_background(job_id, limit=limit),
+            )
+            return
+        _start_job_thread(
+            action_name,
+            lambda: run_face_detection(
+                config_path,
+                limit=max(25, min(int(current_config.pipeline.batch_size or 500), 1000)),
+                force=True,
+            ),
+        )
     app = FastAPI(title="Literoom", version=APP_VERSION)
 
     @app.get("/healthz")
@@ -4033,8 +4115,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         return FileResponse(path, media_type=guessed or "application/octet-stream", headers={"Cache-Control": "public, max-age=3600"})
 
     @app.get("/app/actions/{action_name}")
-    def run_action(action_name: str):
-        current_config, _resolved, _db_path, _managed = _current_config()
+    def run_action(action_name: str, limit: Optional[int] = None):
+        current_config, resolved, db_path, _managed = _current_config()
         if action_name == "toggle-auto":
             updated = AppConfig(
                 workspace_root=current_config.workspace_root,
@@ -4055,14 +4137,42 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             save_config(updated, config_path)
             state = "enabled" if updated.pipeline.auto_sync_enabled else "disabled"
             return RedirectResponse(url=f"/?message=Auto+Sync+{state}", status_code=303)
-        try:
-            _start_background(action_name)
-        except ValueError as exc:
-            return RedirectResponse(url=f"/?message={escape(str(exc)).replace(' ', '+')}", status_code=303)
-        message = "Started+ingest+run"
+        if action_name in {"run-now", "test-ingest", "analyze-imports"}:
+            if not current_config.resolved_sources(resolved):
+                job_name = "ingest" if action_name in {"run-now", "test-ingest"} else "source_analysis"
+                job_id = manifest.create_job(db_path, job_name, {"sources": [], "limit": limit})
+                manifest.start_job(db_path, job_id)
+                manifest.fail_job(db_path, job_id, "No ingest sources configured.", retryable=False, metrics={"sources": []})
+                return RedirectResponse(url="/app/system?message=No+ingest+sources+configured", status_code=303)
+            effective_limit = 10 if action_name == "test-ingest" and limit is None else limit
+            if action_name in {"run-now", "test-ingest"}:
+                job_id = manifest.create_job(
+                    db_path,
+                    "ingest",
+                    {"sources": [str(p) for p in current_config.resolved_sources(resolved)], "limit": effective_limit},
+                )
+                manifest.start_job(db_path, job_id)
+                _start_job_thread(
+                    action_name,
+                    lambda: _run_ingest_background(job_id, limit=effective_limit),
+                )
+                note = "Started+test+ingest+run" if action_name == "test-ingest" else "Started+ingest+run"
+                return RedirectResponse(url=f"/app/system?message={note}", status_code=303)
+            job_id = manifest.create_job(
+                db_path,
+                "source_analysis",
+                {"sources": [str(p) for p in current_config.resolved_sources(resolved)], "limit": effective_limit},
+            )
+            manifest.start_job(db_path, job_id)
+            _start_job_thread(
+                action_name,
+                lambda: _run_source_analysis_background(job_id, limit=effective_limit),
+            )
+            return RedirectResponse(url="/app/system?message=Started+import+analysis", status_code=303)
         if action_name == "detect-faces":
-            message = "Started+face+detection+batch+refresh"
-        return RedirectResponse(url=f"/?message={message}", status_code=303)
+            _start_background(action_name)
+            return RedirectResponse(url="/app/system?message=Started+face+detection+batch+refresh", status_code=303)
+        return RedirectResponse(url="/app/system?message=Unknown+action", status_code=303)
 
     @app.get("/app/history/{seq}/restore")
     def restore_history(seq: int, return_to: str = "/app/system"):

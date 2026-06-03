@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import csv
 import io
 import itertools
@@ -10,13 +11,19 @@ import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import importlib
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
-try:
-    from timezonefinder import TimezoneFinder
-except ImportError:  # pragma: no cover - optional dependency fallback
-    TimezoneFinder = None
+os.environ.setdefault("NUMBA_DISABLE_CACHING", "1")
+
+TimezoneFinder = None
+if not getattr(sys, "frozen", False):  # pragma: no cover - runtime-specific import guard
+    try:
+        TimezoneFinder = importlib.import_module("timezonefinder").TimezoneFinder
+    except Exception:
+        TimezoneFinder = None
 from zoneinfo import ZoneInfo
 
 from . import manifest
@@ -1014,6 +1021,7 @@ def run(
     source_hint: Optional[str] = None,
     batch_size: int = 500,
     job_id: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> int:
     manifest.init_db(Path(db_path))
 
@@ -1040,6 +1048,8 @@ def run(
         record_progress()
 
     for item in paths:
+        if limit is not None and total >= limit:
+            break
         path = Path(item)
         if not path.exists():
             stats["missing_sources"] += 1
@@ -1056,12 +1066,16 @@ def run(
             record_progress()
             continue
         for row in iterator:
+            if limit is not None and total + len(batch) >= limit:
+                break
             batch.append(row)
             if len(batch) >= batch_size:
                 total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
                 stats["processed_assets"] = total
                 record_progress()
                 batch.clear()
+                if limit is not None and total >= limit:
+                    break
     if batch:
         total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
         stats["processed_assets"] = total

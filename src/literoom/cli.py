@@ -26,6 +26,7 @@ from .pipeline import (
     run_metadata_repair,
     run_plan_library,
     run_pilot_pipeline,
+    run_source_analysis,
 )
 from .desktop import launch_desktop_app
 
@@ -115,6 +116,40 @@ def ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[
             suffix.append(f"issues={len(result['source_issues'])}")
         extra = f" ({', '.join(suffix)})" if suffix else ""
         click.echo(f"Ingested rows: {result['rows_upserted']}{extra}")
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@app.command("test-ingest")
+@click.argument("paths", nargs=-1, type=click.Path(path_type=Path, exists=True))
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--source-tag", default=None)
+@click.option("--limit", default=10, show_default=True, type=int)
+def test_ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[str], limit: int):
+    try:
+        result = run_ingest(config_path, source_tag=source_tag, sources=list(paths) or None, limit=limit)
+        click.echo(f"Test ingest rows: {result['rows_upserted']}")
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@app.command("analyze-imports")
+@click.argument("paths", nargs=-1, type=click.Path(path_type=Path, exists=True))
+@click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
+@click.option("--source-tag", default=None)
+@click.option("--limit", default=None, type=int)
+def analyze_imports_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[str], limit: Optional[int]):
+    try:
+        result = run_source_analysis(config_path, source_tag=source_tag, sources=list(paths) or None, limit=limit)
+        click.echo(f"Media files: {result['media_files']}")
+        click.echo(f"Duplicate filename groups: {result['duplicate_basename_groups']}")
+        click.echo(f"Duplicate filename extras: {result['duplicate_basename_items']}")
+        if result.get("repeated_basenames"):
+            click.echo("Common repeats:")
+            for item in result["repeated_basenames"][:10]:
+                click.echo(f"  {item['name']}: {item['count']}")
+        if result.get("source_issues"):
+            click.echo(f"Source issues: {len(result['source_issues'])}")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 

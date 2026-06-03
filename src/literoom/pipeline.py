@@ -13,6 +13,7 @@ from .metadata_repair import repair_metadata
 from . import dedupe
 from . import faces
 from .metadata import gather, manifest, master
+from .source_analysis import analyze_sources
 
 
 def load_runtime(config_path: Path | str = DEFAULT_CONFIG_PATH):
@@ -49,12 +50,19 @@ def run_ingest(
     *,
     source_tag: Optional[str] = None,
     sources: Optional[Sequence[Path | str]] = None,
+    job_id: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> dict:
     config, resolved, db_path = load_runtime(config_path)
     resolved_sources = [Path(p).resolve() for p in sources] if sources else config.resolved_sources(resolved)
     if not resolved_sources:
         raise ValueError("No ingest sources configured.")
-    job_id = manifest.create_job(db_path, "ingest", {"sources": [str(p) for p in resolved_sources]})
+    if job_id is None:
+        job_id = manifest.create_job(
+            db_path,
+            "ingest",
+            {"sources": [str(p) for p in resolved_sources], "limit": limit},
+        )
     manifest.start_job(db_path, job_id)
     try:
         total = gather.run(
@@ -63,7 +71,10 @@ def run_ingest(
             source_hint=source_tag,
             batch_size=config.pipeline.batch_size,
             job_id=job_id,
+            limit=limit,
         )
+        if total <= 0:
+            raise ValueError("No ingestable media found in the selected sources.")
         snapchat_sequence_groups = manifest.build_snapchat_sequence_groups(db_path)
         missing_sources = 0
         malformed_sources = 0
@@ -97,6 +108,37 @@ def run_ingest(
         )
     except Exception as exc:
         _fail_job(db_path, job_id, "ingest", exc, metrics={"sources": [str(p) for p in resolved_sources]})
+        raise
+
+
+def run_source_analysis(
+    config_path: Path | str = DEFAULT_CONFIG_PATH,
+    *,
+    source_tag: Optional[str] = None,
+    sources: Optional[Sequence[Path | str]] = None,
+    limit: Optional[int] = None,
+    job_id: Optional[str] = None,
+) -> dict:
+    config, resolved, db_path = load_runtime(config_path)
+    resolved_sources = [Path(p).resolve() for p in sources] if sources else config.resolved_sources(resolved)
+    if not resolved_sources:
+        raise ValueError("No ingest sources configured.")
+    if job_id is None:
+        job_id = manifest.create_job(
+            db_path,
+            "source_analysis",
+            {"sources": [str(p) for p in resolved_sources], "limit": limit},
+        )
+    manifest.start_job(db_path, job_id)
+    try:
+        result = analyze_sources(
+            list(resolved_sources),
+            source_hint=source_tag,
+            limit=limit,
+        )
+        return _complete_job(db_path, job_id, "source_analysis", {"job_id": job_id, **result})
+    except Exception as exc:
+        _fail_job(db_path, job_id, "source_analysis", exc, metrics={"sources": [str(p) for p in resolved_sources]})
         raise
 
 

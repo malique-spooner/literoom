@@ -111,6 +111,7 @@ class DedupeTests(unittest.TestCase):
             self.assertIn("Choose your folders to begin", page.text)
             self.assertIn("Choose import folder", page.text)
             self.assertIn("Choose library folder", page.text)
+            self.assertIn("Import folder path(s)", page.text)
             if DEFAULT_WORKSPACE_ROOT.exists():
                 self.assertIn(str(DEFAULT_WORKSPACE_ROOT.resolve()), page.text)
             self.assertNotIn("Run ingest now", page.text)
@@ -475,12 +476,14 @@ class DedupeTests(unittest.TestCase):
             called = []
             finished = threading.Event()
 
-            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None):
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None):
                 called.append(
                     (
                         Path(config_path_arg),
                         source_tag,
                         [Path(item) for item in (sources or [])],
+                        job_id,
+                        limit,
                     )
                 )
                 finished.set()
@@ -497,6 +500,8 @@ class DedupeTests(unittest.TestCase):
 
             self.assertEqual(called[0][1], "manual")
             self.assertEqual(called[0][2], [import_dir.resolve()])
+            self.assertIsNotNone(called[0][3])
+            self.assertIsNone(called[0][4])
             self.assertIn("Run ingest now", client.get("/app/settings").text)
 
     def test_run_ingest_now_action_triggers_manual_ingest(self):
@@ -533,12 +538,14 @@ class DedupeTests(unittest.TestCase):
             called = []
             finished = threading.Event()
 
-            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None):
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None):
                 called.append(
                     (
                         Path(config_path_arg),
                         source_tag,
                         [Path(item) for item in (sources or [])],
+                        job_id,
+                        limit,
                     )
                 )
                 finished.set()
@@ -555,7 +562,45 @@ class DedupeTests(unittest.TestCase):
 
             self.assertEqual(called[0][1], "manual")
             self.assertEqual(called[0][2], [import_dir.resolve()])
+            self.assertIsNotNone(called[0][3])
+            self.assertIsNone(called[0][4])
             self.assertIn("Run ingest now", client.get("/app/settings").text)
+
+    def test_run_ingest_now_without_sources_marks_failed_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            managed.mkdir()
+            derived.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "workspace_root: .",
+                        "sources: []",
+                        "paths:",
+                        f"  db_path: {db_path}",
+                        f"  managed_library_dir: {managed}",
+                        f"  derivatives_dir: {derived}",
+                        f"  logs_dir: {root / 'logs'}",
+                        f"  temp_dir: {root / 'tmp'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            client = TestClient(create_app(config_path))
+
+            response = client.get("/app/actions/run-now", follow_redirects=False)
+            jobs = manifest.list_jobs(db_path, limit=1)
+
+            self.assertEqual(response.status_code, 303)
+            self.assertTrue(jobs)
+            self.assertEqual(jobs[0]["status"], "FAILED")
+            self.assertIn("No ingest sources configured", jobs[0]["error_msg"] or "")
 
     def test_keep_all_route_marks_group(self):
         with tempfile.TemporaryDirectory() as tmp:
