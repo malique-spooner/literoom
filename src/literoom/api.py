@@ -28,7 +28,6 @@ from . import intelligence
 from .derivatives import _build_image_thumbnail
 from .metadata import manifest
 from .pipeline import run_face_detection, run_ingest, run_source_analysis
-from .updates import check_for_updates
 from .version import APP_VERSION
 from .utils.location import reverse_geocode_address
 from .tooling import build_tool_stack_report
@@ -3515,7 +3514,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <h1>{escape(page_heading)}</h1>
           </div>
           <div class="button-row">
-            <a class="btn secondary" href="/app/update">Check for updates</a>
             {f'<a class="btn secondary" href="/app/actions/run-now">Run ingest now</a>' if show_run_now else ''}
           </div>
         </div>
@@ -4260,53 +4258,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     @app.get("/app/metadata", response_class=HTMLResponse)
     def metadata_page(field: Optional[str] = None):
         return RedirectResponse(url="/app/system", status_code=303)
-
-    @app.get("/app/update", response_class=HTMLResponse)
-    def update_page():
-        _config, _resolved, db_path, _managed = _current_config()
-        status = check_for_updates()
-        release_url = status.release_url or "https://github.com/malique-spooner/literoom/releases/latest"
-        download_url = status.download_url or release_url
-        details = f"<div class='asset-meta'>{escape(status.message)}</div>"
-        if status.error:
-            details += f"<div class='asset-meta'>Last error: {escape(status.error)}</div>"
-        body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>Updates</h1>
-            <p>Keep the installed app on the newest GitHub release.</p>
-          </div>
-          <div class="button-row">
-            <a href="/app/system"><button class="btn secondary" type="button">Back to System</button></a>
-          </div>
-        </div>
-        <section class="card section">
-          <div class="section-header">
-            <h2>Release status</h2>
-            <p>Current build and the latest public ZIP release.</p>
-          </div>
-          <div class="metrics" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
-            <section class="summary-card">
-              <h2>Installed</h2>
-              <div class="summary-big">{escape(status.current_version)}</div>
-              <div class="summary-copy">this copy of Literoom</div>
-            </section>
-            <section class="summary-card">
-              <h2>Latest</h2>
-              <div class="summary-big">{escape(status.latest_version or "unknown")}</div>
-              <div class="summary-copy">latest GitHub release</div>
-            </section>
-          </div>
-          <div style="margin-top: 16px;">
-            {details}
-          </div>
-          <div class="button-row" style="margin-top: 18px;">
-            <a href="{escape(download_url)}"><button class="btn" type="button">Download latest ZIP</button></a>
-            <a href="{escape(release_url)}" target="_blank" rel="noreferrer"><button class="btn secondary" type="button">Open release notes</button></a>
-          </div>
-        </section>
-        """
-        return _page("Updates", body, history_html=_history_sidebar_html(db_path))
 
     @app.get("/app/people", response_class=HTMLResponse)
     def people_page(
