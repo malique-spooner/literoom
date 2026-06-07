@@ -240,8 +240,6 @@ class ReviewUiTests(unittest.TestCase):
             self.assertIn("System", system_page.text)
             self.assertIn("Imports", system_page.text)
             self.assertNotIn("Media tools", system_page.text)
-            self.assertIn("Check for updates", system_page.text)
-            self.assertIn("Open updates", system_page.text)
             self.assertIn("v1.0.0", system_page.text)
             self.assertIn("Import preflight", system_page.text)
             self.assertIn("Analyze imports", system_page.text)

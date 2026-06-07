@@ -3542,16 +3542,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </section>
           <section class="card section">
             <div class="section-header">
-              <h2>Updates</h2>
-              <p>Check GitHub Releases for a newer desktop build.</p>
-            </div>
-            <div class="button-row">
-              <a href="/app/update"><button class="btn secondary" type="button">Open updates</button></a>
-              <a href="https://github.com/malique-spooner/literoom/releases/latest" target="_blank" rel="noreferrer"><button class="btn" type="button">Open release page</button></a>
-            </div>
-          </section>
-          <section class="card section">
-            <div class="section-header">
               <h2>Import preflight</h2>
               <p>Run a tiny ingest test first, then inspect the source summary before you commit to the full archive.</p>
             </div>
