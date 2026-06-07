@@ -3487,7 +3487,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         workspace_root_path = _setup_workspace_root(current_config, resolved)
         workspace_root_value = str(workspace_root_path)
         import_dir_value = str((workspace_root_path / "imports").resolve())
-        sources_text = "\n".join(current_config.sources) or import_dir_value
         managed_library_dir_value = _rooted_path(workspace_root_path, current_config.paths.managed_library_dir)
         derivatives_dir_value = _rooted_path(workspace_root_path, current_config.paths.derivatives_dir)
         logs_dir_value = _rooted_path(workspace_root_path, current_config.paths.logs_dir)
@@ -3574,14 +3573,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <section class="card section">
             <div class="section-header">
               <h2>Workspace</h2>
-              <p>Choose the workspace and point Literoom at the real import folder. Paste a full path if the folder lives outside the workspace root.</p>
+              <p>Choose the workspace, then pick the import and library folders. Literoom reads the folders locally, it does not upload anything.</p>
             </div>
             <form method="get" action="/app/settings/save" id="settings-form" data-auto-submit="true">
               <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(workspace_root_value)}">
-              <label class="field" style="grid-column:1 / -1; margin-bottom:18px;">
-                <span>Import folder path(s)</span>
-                <textarea name="sources_text" id="sources_text" rows="3" placeholder="/Volumes/Extreme SSD/MSp/literoom/imports">{escape(sources_text)}</textarea>
-              </label>
+              <input type="hidden" name="sources_text" id="sources_text" value="">
               <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
               <input type="hidden" name="managed_library_dir_value" id="managed_library_dir_value" value="{escape(managed_library_dir_value)}">
               <input type="hidden" name="derivatives_dir_value" id="derivatives_dir_value" value="{escape(derivatives_dir_value)}">
@@ -3591,9 +3587,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <span>Import folder</span>
                 <div class="import-picker">
                   <div class="button-row">
-                    <button class="btn secondary" type="button" id="choose-import-folder">Choose import folder…</button>
+                    <button class="btn secondary" type="button" id="choose-import-folder">Select import folder…</button>
                   </div>
-                  <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(sources_text or import_dir_value)}</div>
+                  <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(import_dir_value)}</div>
+                  <div class="asset-meta">This opens a folder picker. Nothing is uploaded.</div>
                   <input type="file" id="import-folder-picker" style="display:none;" webkitdirectory directory multiple>
                 </div>
               </label>
@@ -3601,9 +3598,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <span>Library folder</span>
                 <div class="import-picker">
                   <div class="button-row">
-                    <button class="btn secondary" type="button" id="choose-library-folder">Choose library folder…</button>
+                    <button class="btn secondary" type="button" id="choose-library-folder">Select library folder…</button>
                   </div>
                   <div class="asset-meta" id="chosen-library-folder" style="font-size:.92rem;">{escape(managed_library_dir_value)}</div>
+                  <div class="asset-meta">This also stays local to your Mac.</div>
                   <input type="file" id="library-folder-picker" style="display:none;" webkitdirectory directory multiple>
                 </div>
               </label>
