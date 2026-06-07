@@ -3509,14 +3509,11 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             for group in tool_stack.get("locked_stack", {}).get("groups", [])
         )
         body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>{escape(page_heading)}</h1>
+          <div class="toolbar">
+            <div class="title">
+              <h1>{escape(page_heading)}</h1>
+            </div>
           </div>
-          <div class="button-row">
-            {f'<a class="btn secondary" href="/app/actions/run-now">Run ingest now</a>' if show_run_now else ''}
-          </div>
-        </div>
         {flash}
         <section class="system-stack">
           <section class="system-top">
@@ -3540,17 +3537,16 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </section>
           <section class="card section">
             <div class="section-header">
-              <h2>Import preflight</h2>
-              <p>Run a tiny ingest test first, then inspect the source summary before you commit to the full archive.</p>
+              <h2>Ingest check</h2>
             </div>
-            {analysis_summary_html or "<div class='asset-meta'>No analysis has been run yet. Literoom will show repeat file names and source issues after the first preflight.</div>"}
+            {analysis_summary_html}
             {f'''
             <div class="button-row" style="margin-top:14px;">
-              <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Analyze imports</button></a>
-              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Test ingest (10 files)</button></a>
+              <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Inspect imports</button></a>
+              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Smoke-test ingest</button></a>
+              <a href="/app/actions/run-now"><button class="btn" type="button">Run full ingest</button></a>
             </div>
             ''' if show_run_now else ''}
-            <div class="asset-meta" style="margin-top:10px;">The test ingest uses your configured source folders and stops after ten media files so setup problems surface fast.</div>
           </section>
           <section class="card section">
             <div class="section-header">

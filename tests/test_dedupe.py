@@ -116,7 +116,7 @@ class DedupeTests(unittest.TestCase):
             self.assertNotIn("webkitdirectory", page.text)
             if DEFAULT_WORKSPACE_ROOT.exists():
                 self.assertIn(str(DEFAULT_WORKSPACE_ROOT.resolve()), page.text)
-            self.assertNotIn("Run ingest now", page.text)
+            self.assertNotIn("Run full ingest", page.text)
             self.assertNotIn("We keep this love in a photograph", page.text)
 
     def test_duplicate_group_can_be_resolved_via_app(self):
@@ -405,7 +405,7 @@ class DedupeTests(unittest.TestCase):
             self.assertIn("Settings", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
-            self.assertIn("Run ingest now", page.text)
+            self.assertIn("Run full ingest", page.text)
             self.assertIn("Recent jobs", page.text)
             self.assertIn('action="/app/settings/save"', page.text)
             self.assertIn('name="workspace_root"', page.text)
@@ -504,7 +504,7 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(called[0][2], [import_dir.resolve()])
             self.assertIsNotNone(called[0][3])
             self.assertIsNone(called[0][4])
-            self.assertIn("Run ingest now", client.get("/app/settings").text)
+            self.assertIn("Run full ingest", client.get("/app/settings").text)
 
     def test_run_ingest_now_action_triggers_manual_ingest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -566,7 +566,7 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(called[0][2], [import_dir.resolve()])
             self.assertIsNotNone(called[0][3])
             self.assertIsNone(called[0][4])
-            self.assertIn("Run ingest now", client.get("/app/settings").text)
+            self.assertIn("Run full ingest", client.get("/app/settings").text)
 
     def test_run_ingest_now_without_sources_marks_failed_job(self):
         with tempfile.TemporaryDirectory() as tmp:
