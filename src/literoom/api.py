@@ -3590,8 +3590,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     <button class="btn secondary" type="button" id="choose-import-folder">Select import folder…</button>
                   </div>
                   <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(import_dir_value)}</div>
-                  <div class="asset-meta">This opens a folder picker. Nothing is uploaded.</div>
-                  <input type="file" id="import-folder-picker" style="display:none;" webkitdirectory directory multiple>
+                  <div class="asset-meta">This opens your browser's folder picker. Nothing is uploaded.</div>
                 </div>
               </label>
               <label class="field" style="grid-column:1 / -1; margin-top:8px;">
@@ -3602,7 +3601,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                   </div>
                   <div class="asset-meta" id="chosen-library-folder" style="font-size:.92rem;">{escape(managed_library_dir_value)}</div>
                   <div class="asset-meta">This also stays local to your Mac.</div>
-                  <input type="file" id="library-folder-picker" style="display:none;" webkitdirectory directory multiple>
                 </div>
               </label>
             </form>
@@ -3624,21 +3622,26 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           (function() {
             const workspaceRoot = document.getElementById('workspace-root-input');
             const chooser = document.getElementById('choose-import-folder');
-            const picker = document.getElementById('import-folder-picker');
             const libraryChooser = document.getElementById('choose-library-folder');
-            const libraryPicker = document.getElementById('library-folder-picker');
             const field = document.getElementById('sources_text');
             const label = document.getElementById('chosen-import-folder');
             const libraryField = document.getElementById('managed_library_dir_value');
             const libraryLabel = document.getElementById('chosen-library-folder');
             const form = document.getElementById('settings-form');
-            if (!chooser || !picker || !libraryChooser || !libraryPicker || !field || !label || !libraryField || !libraryLabel || !form) return;
+            if (!chooser || !libraryChooser || !field || !label || !libraryField || !libraryLabel || !form) return;
             const prettyPath = (folderName) => {
               const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\\/+$/, '');
               const clean = String(folderName || '').replace(/^\\/+/, '');
               if (!clean) return root;
               if (!root) return clean;
               return `${root}/${clean}`;
+            };
+            const pickDirectory = async (fallbackName) => {
+              if (window.showDirectoryPicker) {
+                const handle = await window.showDirectoryPicker({ mode: 'read' });
+                if (handle && handle.name) return handle.name;
+              }
+              return fallbackName;
             };
             if (workspaceRoot) {
               workspaceRoot.addEventListener('change', function() {
@@ -3647,37 +3650,27 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 form.requestSubmit();
               });
             }
-            chooser.addEventListener('click', function() {
-              picker.click();
+            chooser.addEventListener('click', async function() {
+              try {
+                const selected = await pickDirectory('imports');
+                if (!selected) return;
+                field.value = selected;
+                label.textContent = prettyPath(selected);
+                form.submit();
+              } catch (error) {
+                console.error(error);
+              }
             });
-            picker.addEventListener('change', function() {
-              const files = Array.from(picker.files || []);
-              if (!files.length) return;
-              const roots = Array.from(new Set(files.map(file => {
-                const rel = file.webkitRelativePath || file.name || '';
-                return rel.split('/')[0];
-              }).filter(Boolean)));
-              const selected = roots[0] || '';
-              if (!selected) return;
-              field.value = selected;
-              label.textContent = prettyPath(selected);
-              form.submit();
-            });
-            libraryChooser.addEventListener('click', function() {
-              libraryPicker.click();
-            });
-            libraryPicker.addEventListener('change', function() {
-              const files = Array.from(libraryPicker.files || []);
-              if (!files.length) return;
-              const roots = Array.from(new Set(files.map(file => {
-                const rel = file.webkitRelativePath || file.name || '';
-                return rel.split('/')[0];
-              }).filter(Boolean)));
-              const selected = roots[0] || '';
-              if (!selected) return;
-              libraryField.value = selected;
-              libraryLabel.textContent = prettyPath(selected);
-              form.submit();
+            libraryChooser.addEventListener('click', async function() {
+              try {
+                const selected = await pickDirectory('library');
+                if (!selected) return;
+                libraryField.value = selected;
+                libraryLabel.textContent = prettyPath(selected);
+                form.submit();
+              } catch (error) {
+                console.error(error);
+              }
             });
           })();
         </script>
