@@ -39,7 +39,7 @@ class RecoveryTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_factory_reset_keeps_sources_but_clears_database(self):
+    def test_first_startup_keeps_import_folders_but_clears_database_and_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             db_path = root / "manifest.sqlite"
@@ -58,46 +58,18 @@ class RecoveryTests(unittest.TestCase):
             self._write_config(config_path, db_path, managed, derived, root, [import_dir])
             client = TestClient(create_app(config_path))
 
-            response = client.get("/app/actions/factory-reset/confirm", follow_redirects=False)
-
-            self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/app/system?message=Factory+reset+complete")
-            self.assertEqual(manifest.list_jobs(db_path), [])
-            loaded, _ = load_config(config_path)
-            self.assertEqual(loaded.sources, [str(import_dir)])
-            self.assertTrue(import_dir.exists())
-            page = client.get("/app/system")
-            self.assertIn("Ingest check", page.text)
-            self.assertIn("Recovery", page.text)
-
-    def test_first_startup_clears_sources_and_returns_to_welcome(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            db_path = root / "manifest.sqlite"
-            managed = root / "library"
-            derived = root / "derived"
-            import_dir = root / "imports"
-            managed.mkdir()
-            derived.mkdir()
-            import_dir.mkdir()
-            manifest.init_db(db_path)
-            manifest.create_job(db_path, "ingest", {"sources": [str(import_dir)]})
-
-            config_path = root / "config.yaml"
-            self._write_config(config_path, db_path, managed, derived, root, [import_dir])
-            client = TestClient(create_app(config_path))
-
             response = client.get("/app/actions/first-startup/confirm", follow_redirects=False)
 
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/")
+            self.assertEqual(manifest.list_jobs(db_path), [])
             loaded, _ = load_config(config_path)
             self.assertEqual(loaded.sources, [])
-            self.assertEqual(manifest.list_jobs(db_path), [])
+            self.assertTrue(import_dir.exists())
             page = client.get("/")
             self.assertIn("Welcome to Literoom", page.text)
             self.assertIn("Choose your folders to begin", page.text)
-            self.assertNotIn("Recovery", page.text)
+            self.assertNotIn("Startup", page.text)
 
 
 if __name__ == "__main__":

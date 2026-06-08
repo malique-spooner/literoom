@@ -477,7 +477,7 @@ class DedupeTests(unittest.TestCase):
             called = []
             finished = threading.Event()
 
-            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None):
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None, sample_recent=False):
                 called.append(
                     (
                         Path(config_path_arg),
@@ -485,6 +485,7 @@ class DedupeTests(unittest.TestCase):
                         [Path(item) for item in (sources or [])],
                         job_id,
                         limit,
+                        sample_recent,
                     )
                 )
                 finished.set()
@@ -503,7 +504,72 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(called[0][2], [import_dir.resolve()])
             self.assertIsNotNone(called[0][3])
             self.assertIsNone(called[0][4])
+            self.assertFalse(called[0][5])
             self.assertIn("Run full ingest", client.get("/app/settings").text)
+
+    def test_test_ingest_action_uses_smoke_sample(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            import_dir = root / "imports"
+            managed.mkdir()
+            derived.mkdir()
+            import_dir.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "workspace_root: .",
+                        "sources:",
+                        f"  - {import_dir}",
+                        "paths:",
+                        f"  db_path: {db_path}",
+                        f"  managed_library_dir: {managed}",
+                        f"  derivatives_dir: {derived}",
+                        f"  logs_dir: {root / 'logs'}",
+                        f"  temp_dir: {root / 'tmp'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            client = TestClient(create_app(config_path))
+
+            called = []
+            finished = threading.Event()
+
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None, sample_recent=False):
+                called.append(
+                    (
+                        Path(config_path_arg),
+                        source_tag,
+                        [Path(item) for item in (sources or [])],
+                        job_id,
+                        limit,
+                        sample_recent,
+                    )
+                )
+                finished.set()
+                return {"rows_upserted": 0}
+
+            with mock.patch("literoom.api.run_ingest", side_effect=fake_run_ingest) as ingest_mock, mock.patch(
+                "literoom.api.run_face_detection"
+            ) as face_mock:
+                response = client.get("/app/actions/test-ingest", follow_redirects=False)
+                self.assertEqual(response.status_code, 303)
+                self.assertTrue(finished.wait(2))
+                ingest_mock.assert_called_once()
+                face_mock.assert_not_called()
+
+            self.assertEqual(called[0][1], "manual")
+            self.assertEqual(called[0][2], [import_dir.resolve()])
+            self.assertIsNotNone(called[0][3])
+            self.assertEqual(called[0][4], 100)
+            self.assertTrue(called[0][5])
+            self.assertIn("Smoke ingest (100 recent)", client.get("/app/settings").text)
 
     def test_run_ingest_now_action_triggers_manual_ingest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -539,7 +605,7 @@ class DedupeTests(unittest.TestCase):
             called = []
             finished = threading.Event()
 
-            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None):
+            def fake_run_ingest(config_path_arg, *, source_tag=None, sources=None, job_id=None, limit=None, sample_recent=False):
                 called.append(
                     (
                         Path(config_path_arg),
@@ -547,6 +613,7 @@ class DedupeTests(unittest.TestCase):
                         [Path(item) for item in (sources or [])],
                         job_id,
                         limit,
+                        sample_recent,
                     )
                 )
                 finished.set()
@@ -565,6 +632,7 @@ class DedupeTests(unittest.TestCase):
             self.assertEqual(called[0][2], [import_dir.resolve()])
             self.assertIsNotNone(called[0][3])
             self.assertIsNone(called[0][4])
+            self.assertFalse(called[0][5])
             self.assertIn("Run full ingest", client.get("/app/settings").text)
 
     def test_run_ingest_now_without_sources_marks_failed_job(self):

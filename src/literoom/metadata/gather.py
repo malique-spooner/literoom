@@ -1022,6 +1022,7 @@ def run(
     batch_size: int = 500,
     job_id: Optional[str] = None,
     limit: Optional[int] = None,
+    sample_recent: bool = False,
 ) -> int:
     manifest.init_db(Path(db_path))
 
@@ -1047,8 +1048,10 @@ def run(
             issues.append({"path": str(path), "error": str(exc)})
         record_progress()
 
+    collected_rows: List[Dict[str, Any]] = []
+
     for item in paths:
-        if limit is not None and total >= limit:
+        if limit is not None and not sample_recent and total >= limit:
             break
         path = Path(item)
         if not path.exists():
@@ -1066,16 +1069,35 @@ def run(
             record_progress()
             continue
         for row in iterator:
-            if limit is not None and total + len(batch) >= limit:
+            if limit is not None and not sample_recent and total + len(batch) >= limit:
                 break
+            if sample_recent and row.get("media_type") not in {"image", "video"}:
+                continue
+            if sample_recent and limit is not None:
+                collected_rows.append(row)
+            else:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
+                    stats["processed_assets"] = total
+                    record_progress()
+                    batch.clear()
+                    if limit is not None and total >= limit:
+                        break
+    if sample_recent and limit is not None:
+        def _recent_sort_key(row: Dict[str, Any]) -> tuple[str, str]:
+            stamp = str(row.get("src_mtime") or row.get("dt_original") or "")
+            locator = str(row.get("source_locator") or row.get("zip_path") or row.get("orig_filename") or "")
+            return (stamp, locator)
+
+        collected_rows.sort(key=_recent_sort_key, reverse=True)
+        for row in collected_rows[:limit]:
             batch.append(row)
             if len(batch) >= batch_size:
                 total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
                 stats["processed_assets"] = total
                 record_progress()
                 batch.clear()
-                if limit is not None and total >= limit:
-                    break
     if batch:
         total += manifest.upsert_raw(batch, db_path=Path(db_path), job_id=job_id)
         stats["processed_assets"] = total

@@ -124,10 +124,16 @@ def ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[
 @click.argument("paths", nargs=-1, type=click.Path(path_type=Path, exists=True))
 @click.option("--config", "config_path", default=str(DEFAULT_CONFIG_PATH), type=click.Path(path_type=Path))
 @click.option("--source-tag", default=None)
-@click.option("--limit", default=10, show_default=True, type=int)
+@click.option("--limit", default=100, show_default=True, type=int)
 def test_ingest_cmd(paths: Tuple[Path, ...], config_path: Path, source_tag: Optional[str], limit: int):
     try:
-        result = run_ingest(config_path, source_tag=source_tag, sources=list(paths) or None, limit=limit)
+        result = run_ingest(
+            config_path,
+            source_tag=source_tag,
+            sources=list(paths) or None,
+            limit=limit,
+            sample_recent=True,
+        )
         click.echo(f"Test ingest rows: {result['rows_upserted']}")
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc

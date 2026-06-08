@@ -3598,7 +3598,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             {f'''
             <div class="button-row" style="margin-top:14px;">
               <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Inspect imports</button></a>
-              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Smoke-test ingest</button></a>
+              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Smoke ingest (100 recent)</button></a>
               <a href="/app/actions/run-now"><button class="btn" type="button">Run full ingest</button></a>
             </div>
             ''' if show_run_now else ''}
@@ -3606,10 +3606,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           {'''
           <section class="card section">
             <div class="section-header">
-              <h2>Recovery</h2>
+              <h2>Startup</h2>
             </div>
             <div class="button-row">
-              <a href="/app/actions/factory-reset"><button class="btn secondary" type="button">Factory reset</button></a>
               <a href="/app/actions/first-startup"><button class="btn secondary" type="button">First startup</button></a>
             </div>
           </section>
@@ -3727,7 +3726,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         """
         return _page(page_title, body, history_html=_history_sidebar_html(db_path))
 
-    def _run_ingest_background(job_id: str, *, limit: Optional[int] = None):
+    def _run_ingest_background(job_id: str, *, limit: Optional[int] = None, sample_recent: bool = False):
         if not auto_sync_lock.acquire(blocking=False):
             return
         auto_sync_state["running"] = True
@@ -3740,6 +3739,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 sources=current_config.resolved_sources(resolved),
                 job_id=job_id,
                 limit=limit,
+                sample_recent=sample_recent,
             )
             auto_sync_state["last_result"] = result
             auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -4185,7 +4185,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 manifest.start_job(db_path, job_id)
                 manifest.fail_job(db_path, job_id, "No ingest sources configured.", retryable=False, metrics={"sources": []})
                 return RedirectResponse(url="/app/system?message=No+ingest+sources+configured", status_code=303)
-            effective_limit = 10 if action_name == "test-ingest" and limit is None else limit
+            effective_limit = 100 if action_name == "test-ingest" and limit is None else limit
             if action_name in {"run-now", "test-ingest"}:
                 job_id = manifest.create_job(
                     db_path,
@@ -4195,9 +4195,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 manifest.start_job(db_path, job_id)
                 _start_job_thread(
                     action_name,
-                    lambda: _run_ingest_background(job_id, limit=effective_limit),
+                    lambda: _run_ingest_background(job_id, limit=effective_limit, sample_recent=(action_name == "test-ingest")),
                 )
-                note = "Started+test+ingest+run" if action_name == "test-ingest" else "Started+ingest+run"
+                note = "Started+smoke+ingest" if action_name == "test-ingest" else "Started+ingest+run"
                 return RedirectResponse(url=f"/app/system?message={note}", status_code=303)
             job_id = manifest.create_job(
                 db_path,
@@ -4318,35 +4318,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     def metadata_page(field: Optional[str] = None):
         return RedirectResponse(url="/app/system", status_code=303)
 
-    @app.get("/app/actions/factory-reset", response_class=HTMLResponse)
-    def factory_reset_page():
-        _config, _resolved, db_path, _managed = _current_config()
-        body = f"""
-        <div class="toolbar">
-          <div class="title">
-            <h1>Factory reset</h1>
-            <p>Clear Literoom data and start fresh while keeping your import folders intact.</p>
-          </div>
-          <div class="button-row">
-            <a href="/app/system"><button class="btn secondary" type="button">Cancel</button></a>
-            <a href="/app/actions/factory-reset/confirm"><button class="btn" type="button">Confirm reset</button></a>
-          </div>
-        </div>
-        <section class="card section">
-          <div class="section-header">
-            <h2>What this does</h2>
-          </div>
-          <div class="asset-meta">Deletes the database and generated app data. Your import folders are left alone.</div>
-        </section>
-        """
-        return _page("Factory reset", body, history_html=_history_sidebar_html(db_path))
-
-    @app.get("/app/actions/factory-reset/confirm")
-    def factory_reset_confirm():
-        current_config, resolved, db_path, _managed = _current_config()
-        _wipe_workspace_data(current_config, resolved, clear_sources=False)
-        return RedirectResponse(url="/app/system?message=Factory+reset+complete", status_code=303)
-
     @app.get("/app/actions/first-startup", response_class=HTMLResponse)
     def first_startup_page():
         _config, _resolved, db_path, _managed = _current_config()
@@ -4354,18 +4325,18 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         <div class="toolbar">
           <div class="title">
             <h1>First startup</h1>
-            <p>Rewind Literoom to the onboarding flow without deleting your import folders.</p>
+            <p>Reset Literoom to the onboarding flow so you can choose the import and library folders again.</p>
           </div>
           <div class="button-row">
             <a href="/app/system"><button class="btn secondary" type="button">Cancel</button></a>
-            <a href="/app/actions/first-startup/confirm"><button class="btn" type="button">Confirm first startup</button></a>
+            <a href="/app/actions/first-startup/confirm"><button class="btn" type="button">Confirm reset</button></a>
           </div>
         </div>
         <section class="card section">
           <div class="section-header">
             <h2>What this does</h2>
           </div>
-          <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the welcome screen.</div>
+          <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the welcome screen to pick import and library folders again.</div>
         </section>
         """
         return _page("First startup", body, history_html=_history_sidebar_html(db_path))

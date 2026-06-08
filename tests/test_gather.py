@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import datetime
@@ -25,6 +26,28 @@ class GatherTests(unittest.TestCase):
 
             self.assertEqual(rows, 1)
             self.assertEqual(overview["assets_total"], 1)
+
+    def test_smoke_ingest_samples_recent_media_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            media_dir = root / "media"
+            media_dir.mkdir()
+            older = media_dir / "older.jpg"
+            middle = media_dir / "middle.mp4"
+            newest = media_dir / "newest.jpg"
+            older.write_bytes(b"older")
+            middle.write_bytes(b"middle")
+            newest.write_bytes(b"newest")
+            os.utime(older, (1700000000, 1700000000))
+            os.utime(middle, (1800000000, 1800000000))
+            os.utime(newest, (1900000000, 1900000000))
+            db_path = root / "manifest.sqlite"
+
+            rows = gather.run([media_dir], db_path=db_path, batch_size=2, limit=2, sample_recent=True)
+            assets = manifest.list_assets(db_path, limit=10, include_hidden=True)
+
+            self.assertEqual(rows, 2)
+            self.assertEqual([row["orig_filename"] for row in assets], ["newest.jpg", "middle.mp4"])
 
     def test_ingest_reports_missing_and_malformed_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

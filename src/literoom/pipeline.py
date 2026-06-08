@@ -52,6 +52,7 @@ def run_ingest(
     sources: Optional[Sequence[Path | str]] = None,
     job_id: Optional[str] = None,
     limit: Optional[int] = None,
+    sample_recent: bool = False,
 ) -> dict:
     config, resolved, db_path = load_runtime(config_path)
     resolved_sources = [Path(p).resolve() for p in sources] if sources else config.resolved_sources(resolved)
@@ -72,6 +73,7 @@ def run_ingest(
             batch_size=config.pipeline.batch_size,
             job_id=job_id,
             limit=limit,
+            sample_recent=sample_recent,
         )
         if total <= 0:
             raise ValueError("No ingestable media found in the selected sources.")
