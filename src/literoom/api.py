@@ -1936,6 +1936,66 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
         color: var(--muted);
         backdrop-filter: blur(16px) saturate(150%);
       }}
+      .startup-stepper {{
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }}
+      .startup-step {{
+        display: grid;
+        gap: 6px;
+        padding: 14px;
+        border-radius: 22px;
+        border: 1px solid rgba(255,255,255,.62);
+        background: rgba(255,255,255,.50);
+        backdrop-filter: blur(18px) saturate(150%);
+        box-shadow: 0 10px 24px rgba(15,23,42,.06);
+      }}
+      .startup-step.is-active {{
+        border-color: rgba(10,132,255,.25);
+        box-shadow: 0 12px 28px rgba(10,132,255,.12);
+      }}
+      .startup-step.is-complete {{
+        border-color: rgba(24,169,87,.28);
+        box-shadow: 0 12px 28px rgba(24,169,87,.12);
+      }}
+      .startup-step.is-pending,
+      .startup-step.is-locked {{
+        opacity: .82;
+      }}
+      .startup-step-topline {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }}
+      .startup-step-index {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: rgba(10,132,255,.12);
+        color: #0a4fa0;
+        font-weight: 700;
+        font-size: .86rem;
+        flex: 0 0 auto;
+      }}
+      .startup-step.is-complete .startup-step-index {{
+        background: rgba(24,169,87,.14);
+        color: #0b7d3c;
+      }}
+      .startup-step-title {{
+        font-weight: 700;
+        letter-spacing: -.02em;
+      }}
+      .startup-step-copy {{
+        color: var(--muted);
+        font-size: .88rem;
+        line-height: 1.35;
+      }}
       .viewer-shell {{
         display: grid;
         gap: 18px;
@@ -2137,6 +2197,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
               const copy = widget.querySelector('[data-live-progress-copy]');
               const detail = widget.querySelector('[data-live-progress-detail]');
               const spinner = widget.querySelector('[data-live-progress-spinner]');
+              const status = widget.querySelector('[data-live-progress-status]');
               const pct = live.percent_complete;
               const hasTotal = Number.isFinite(pct);
               const state = live.state || (hasTotal && Number(pct) >= 100 ? 'complete' : 'idle');
@@ -2165,6 +2226,13 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
               }}
               if (spinner) {{
                 spinner.classList.toggle('is-hidden', !(state === 'running' || state === 'queued'));
+              }}
+              if (status) {{
+                status.textContent = state === 'running' || state === 'queued'
+                  ? (live.label ? `${{live.label}} · Running` : 'Running')
+                  : state === 'complete'
+                    ? (live.label ? `${{live.label}} · Complete` : 'Complete')
+                    : (live.label || 'Waiting');
               }}
               widget.dataset.liveState = state;
             }});
@@ -2259,9 +2327,16 @@ def _live_progress_snapshot(db_path: Path) -> dict:
             }
         elif job_type == "ingest":
             done = int(metrics.get("processed_assets") or 0)
+            target_limit = metrics.get("target_limit")
             missing = int(metrics.get("missing_sources") or 0)
             malformed = int(metrics.get("malformed_sources") or 0)
             detail = f"{done:,} assets imported so far"
+            percent = None
+            if target_limit is not None:
+                limit_value = max(int(target_limit or 0), 0)
+                if limit_value > 0:
+                    percent = round((done / limit_value) * 100, 1)
+                    detail = f"{done:,} of {limit_value:,} assets imported"
             if missing or malformed:
                 parts = []
                 if missing:
@@ -2275,8 +2350,8 @@ def _live_progress_snapshot(db_path: Path) -> dict:
                 "detail": detail,
                 "processed_assets": done,
                 "remaining_assets": None,
-                "total_assets": None,
-                "percent_complete": None,
+                "total_assets": target_limit,
+                "percent_complete": percent,
             }
     return {
         "import_progress": import_progress,
@@ -3614,6 +3689,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <span class="progress-spinner is-hidden" data-live-progress-spinner aria-hidden="true"></span>
                 <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
               </div>
+              <div class="status-pill" data-live-progress-status>{escape(live_progress.get('label') or ('Running' if live_progress.get('state') in {'running', 'queued'} else 'Waiting'))}</div>
               <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
               <div class="progress-shell" style="margin-top:12px;">
               <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
@@ -3811,6 +3887,19 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         db_path_value = current_config.paths.db_path
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
+        startup_ready = bool(current_config.startup_import_ready and current_config.startup_library_ready)
+        step_1_state = "complete" if startup_ready else "active"
+        step_2_state = "complete" if latest_analysis and analysis_metrics else ("active" if startup_ready else "pending")
+        step_3_state = "complete" if current_config.onboarding_complete else ("active" if startup_ready else "pending")
+        step_4_state = "complete" if current_config.onboarding_complete else "locked"
+        startup_status_text = (
+            "Onboarding complete"
+            if current_config.onboarding_complete
+            else (
+                live_progress.get("detail")
+                or "Choose both folders, then run the smoke ingest on 100 recent images and videos."
+            )
+        )
         body = f"""
           <div class="toolbar">
             <div class="title">
@@ -3819,6 +3908,30 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             </div>
           </div>
         {flash}
+        <section class="card section">
+          <div class="section-header">
+            <h2>Startup map</h2>
+            <p>Follow the steps in order. Literoom stays locked until the smoke ingest completes successfully.</p>
+          </div>
+          <div class="startup-stepper">
+            <div class="startup-step is-{step_1_state}">
+              <div class="startup-step-topline"><span class="startup-step-index">1</span><span class="startup-step-title">Choose folders</span></div>
+              <div class="startup-step-copy">Pick the import and library folders. They save automatically once both are set.</div>
+            </div>
+            <div class="startup-step is-{step_2_state}">
+              <div class="startup-step-topline"><span class="startup-step-index">2</span><span class="startup-step-title">Inspect imports</span></div>
+              <div class="startup-step-copy">Quickly scan for repeated names and source issues before any ingest runs.</div>
+            </div>
+            <div class="startup-step is-{step_3_state}">
+              <div class="startup-step-topline"><span class="startup-step-index">3</span><span class="startup-step-title">Smoke ingest</span></div>
+              <div class="startup-step-copy">Run the newest 100 images and videos through the pipeline as a small proof step.</div>
+            </div>
+            <div class="startup-step is-{step_4_state}">
+              <div class="startup-step-topline"><span class="startup-step-index">4</span><span class="startup-step-title">Unlock app</span></div>
+              <div class="startup-step-copy">When smoke ingest finishes cleanly, Library, Review, and the rest open up.</div>
+            </div>
+          </div>
+        </section>
         <section class="card section">
           <div class="section-header">
             <h2>1. Choose folders</h2>
@@ -3885,6 +3998,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               <span class="progress-spinner is-hidden" data-live-progress-spinner aria-hidden="true"></span>
               <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
             </div>
+            <div class="status-pill" data-live-progress-status>{escape(startup_status_text)}</div>
             <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
             <div class="progress-shell" style="margin-top:12px;">
               <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>

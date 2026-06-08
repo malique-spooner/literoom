@@ -1035,6 +1035,8 @@ def run(
         "missing_sources": 0,
         "malformed_sources": 0,
         "source_issues": [],
+        "target_limit": limit,
+        "sample_recent": bool(sample_recent),
     }
 
     def record_progress() -> None:
