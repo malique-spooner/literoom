@@ -122,8 +122,8 @@ class DedupeTests(unittest.TestCase):
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
             self.assertNotIn("Save folder choices", page.text)
-            self.assertIn("Inspect imports", page.text)
-            self.assertIn("Smoke ingest (100 recent)", page.text)
+            self.assertIn("Check imports", page.text)
+            self.assertIn("Smoke ingest", page.text)
             self.assertNotIn('type="file"', page.text)
             self.assertNotIn("webkitdirectory", page.text)
             self.assertNotIn("Run full ingest", page.text)
@@ -588,7 +588,7 @@ class DedupeTests(unittest.TestCase):
             self.assertIsNotNone(called[0][3])
             self.assertEqual(called[0][4], 100)
             self.assertTrue(called[0][5])
-            self.assertIn("Smoke ingest (100 recent)", client.get("/app/settings").text)
+            self.assertIn("Smoke ingest", client.get("/app/settings").text)
 
     def test_run_ingest_now_action_triggers_manual_ingest(self):
         with tempfile.TemporaryDirectory() as tmp:

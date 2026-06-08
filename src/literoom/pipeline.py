@@ -135,8 +135,10 @@ def run_source_analysis(
     try:
         result = analyze_sources(
             list(resolved_sources),
+            db_path=db_path,
             source_hint=source_tag,
             limit=limit,
+            job_id=job_id,
         )
         return _complete_job(db_path, job_id, "source_analysis", {"job_id": job_id, **result})
     except Exception as exc:

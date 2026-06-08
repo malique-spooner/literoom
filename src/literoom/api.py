@@ -2353,6 +2353,21 @@ def _live_progress_snapshot(db_path: Path) -> dict:
                 "total_assets": target_limit,
                 "percent_complete": percent,
             }
+        elif job_type == "source_analysis":
+            done = int(metrics.get("processed_assets") or metrics.get("media_files") or 0)
+            total_sources = int(metrics.get("total_sources") or 0)
+            selected_sources = int(metrics.get("selected_sources") or 0)
+            detail = metrics.get("detail") or f"{done:,} files seen"
+            live_progress = {
+                "state": str(active_job.get("status") or "RUNNING").lower(),
+                "label": "Checking imports",
+                "detail": str(detail),
+                "processed_assets": done,
+                "remaining_assets": None,
+                "total_assets": total_sources or None,
+                "percent_complete": None,
+                "selected_sources": selected_sources,
+            }
     return {
         "import_progress": import_progress,
         "pipeline": pipeline_health,
@@ -3712,8 +3727,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             {analysis_summary_html}
             {f'''
             <div class="button-row" style="margin-top:14px;">
-              <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Inspect imports</button></a>
-              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Smoke ingest (100 recent)</button></a>
+              <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Check imports</button></a>
+              <a href="/app/actions/test-ingest"><button class="btn secondary" type="button">Smoke ingest</button></a>
               <a href="/app/actions/run-now"><button class="btn" type="button">Run full ingest</button></a>
             </div>
             ''' if show_run_now else ''}
@@ -3888,18 +3903,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
         startup_ready = bool(current_config.startup_import_ready and current_config.startup_library_ready)
-        step_1_state = "complete" if startup_ready else "active"
-        step_2_state = "complete" if latest_analysis and analysis_metrics else ("active" if startup_ready else "pending")
-        step_3_state = "complete" if current_config.onboarding_complete else ("active" if startup_ready else "pending")
-        step_4_state = "complete" if current_config.onboarding_complete else "locked"
-        startup_status_text = (
-            "Onboarding complete"
-            if current_config.onboarding_complete
-            else (
-                live_progress.get("detail")
-                or "Choose both folders, then run the smoke ingest on 100 recent images and videos."
-            )
-        )
         body = f"""
           <div class="toolbar">
             <div class="title">
@@ -3914,21 +3917,25 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <p>Follow the steps in order. Literoom stays locked until the smoke ingest completes successfully.</p>
           </div>
           <div class="startup-stepper">
-            <div class="startup-step is-{step_1_state}">
+            <div class="startup-step is-{("complete" if startup_ready else "active")}">
               <div class="startup-step-topline"><span class="startup-step-index">1</span><span class="startup-step-title">Choose folders</span></div>
               <div class="startup-step-copy">Pick the import and library folders. They save automatically once both are set.</div>
             </div>
-            <div class="startup-step is-{step_2_state}">
-              <div class="startup-step-topline"><span class="startup-step-index">2</span><span class="startup-step-title">Inspect imports</span></div>
-              <div class="startup-step-copy">Quickly scan for repeated names and source issues before any ingest runs.</div>
+            <div class="startup-step is-pending" data-startup-step-widget data-startup-role="analysis">
+              <div class="startup-step-topline"><span class="startup-step-index">2</span><span class="startup-step-title">Check imports</span></div>
+              <div class="startup-step-copy">Scan for repeated names and source issues before any ingest runs.</div>
+              <div class="progress-shell" style="margin-top:10px;">
+                <div class="progress-track"><div class="progress-fill is-idle" data-startup-step-fill style="width:0%"></div></div>
+                <div class="asset-meta" data-startup-step-status>Waiting</div>
+              </div>
             </div>
-            <div class="startup-step is-{step_3_state}">
+            <div class="startup-step is-pending" data-startup-step-widget data-startup-role="smoke">
               <div class="startup-step-topline"><span class="startup-step-index">3</span><span class="startup-step-title">Smoke ingest</span></div>
               <div class="startup-step-copy">Run the newest 100 images and videos through the pipeline as a small proof step.</div>
-            </div>
-            <div class="startup-step is-{step_4_state}">
-              <div class="startup-step-topline"><span class="startup-step-index">4</span><span class="startup-step-title">Unlock app</span></div>
-              <div class="startup-step-copy">When smoke ingest finishes cleanly, Library, Review, and the rest open up.</div>
+              <div class="progress-shell" style="margin-top:10px;">
+                <div class="progress-track"><div class="progress-fill is-idle" data-startup-step-fill style="width:0%"></div></div>
+                <div class="asset-meta" data-startup-step-status>Waiting</div>
+              </div>
             </div>
           </div>
         </section>
@@ -3972,41 +3979,17 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </div>
           {analysis_summary_html}
           <div class="button-row" style="margin-top:14px;">
-            <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button" id="startup-inspect-imports">Inspect imports</button></a>
+            <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button" id="startup-inspect-imports">Check imports</button></a>
           </div>
         </section>
         <section class="card section">
           <div class="section-header">
-            <h2>3. Prove ingest on a small sample</h2>
+            <h2>3. Smoke ingest the latest sample</h2>
             <p>Smoke ingest uses the newest 100 images and videos. It stops there so you can verify the pipeline first.</p>
           </div>
           <div class="button-row" style="margin-top:14px;">
-            <a href="/app/actions/test-ingest"><button class="btn" type="button" id="startup-smoke-ingest">Smoke ingest (100 recent)</button></a>
+            <a href="/app/actions/test-ingest"><button class="btn" type="button" id="startup-smoke-ingest">Smoke ingest</button></a>
           </div>
-        </section>
-        <section class="card section">
-          <div class="section-header">
-            <h2>4. Unlock Literoom</h2>
-            <p>When the smoke ingest finishes successfully, the rest of the app opens up.</p>
-          </div>
-          <div class="asset-meta">Other pages stay locked until the onboarding smoke test is complete.</div>
-        </section>
-        <section class="system-top" style="margin-top:24px;">
-          <section class="system-card" data-live-progress-widget>
-            <h3>Imports</h3>
-            <div class="progress-status">
-              <span class="progress-spinner is-hidden" data-live-progress-spinner aria-hidden="true"></span>
-              <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
-            </div>
-            <div class="status-pill" data-live-progress-status>{escape(startup_status_text)}</div>
-            <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
-            <div class="progress-shell" style="margin-top:12px;">
-              <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
-              <div class="asset-meta" data-live-progress-detail{live_detail_attr}>{escape(str(live_progress.get('detail') or ''))}</div>
-            </div>
-          </section>
-          <section class="system-card"><h3>Library</h3><div class="big">{overview.get('assets_total', 0)}</div><div class="asset-meta">items ready to browse</div></section>
-          <section class="system-card"><h3>Coverage</h3><div class="big">{metadata_overview.get('average_metadata_score', 0)}</div><div class="asset-meta">average metadata coverage</div></section>
         </section>
         """
         body += """
@@ -4022,6 +4005,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             const form = document.getElementById('startup-settings-form');
             const inspectButton = document.getElementById('startup-inspect-imports');
             const smokeButton = document.getElementById('startup-smoke-ingest');
+            const startupStepWidgets = Array.from(document.querySelectorAll('[data-startup-step-widget]'));
             if (!chooser || !libraryChooser || !field || !label || !libraryField || !libraryLabel || !form) return;
             let submitting = false;
             const normalizeSelection = (selected) => String(selected || '').trim();
@@ -4050,6 +4034,93 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 updateControls();
               });
             }
+            const latestMatchingJob = (jobs, jobType, predicate) => {
+              return (jobs || []).find((job) => {
+                if (String(job.job_type || '') !== jobType) return false;
+                if (!predicate) return true;
+                return predicate(job);
+              }) || null;
+            };
+            const parseMetrics = (value) => {
+              if (!value) return {};
+              if (typeof value === 'object') return value;
+              try {
+                const parsed = JSON.parse(String(value));
+                return parsed && typeof parsed === 'object' ? parsed : {};
+              } catch (error) {
+                return {};
+              }
+            };
+            const renderStartupSteps = (payload) => {
+              const live = payload && payload.live_progress ? payload.live_progress : {};
+              const active = payload && payload.active_job ? payload.active_job : null;
+              const jobs = payload && payload.jobs ? payload.jobs : [];
+              const onboardingComplete = Boolean(payload && payload.onboarding_complete);
+              const analysisJob = latestMatchingJob(jobs, 'source_analysis');
+              const smokeJob = latestMatchingJob(jobs, 'ingest', (job) => {
+                const metrics = parseMetrics(job && job.metrics_json);
+                return Boolean(metrics.sample_recent || Number(metrics.limit || 0) === 100);
+              });
+              startupStepWidgets.forEach((widget) => {
+                const role = widget.dataset.startupRole || '';
+                const fill = widget.querySelector('[data-startup-step-fill]');
+                const status = widget.querySelector('[data-startup-step-status]');
+                let state = 'pending';
+                let detail = 'Waiting';
+                let width = '0%';
+                if (role === 'analysis') {
+                  const isActive = active && String(active.job_type || '') === 'source_analysis';
+                  const isComplete = analysisJob && String(analysisJob.status || '').toUpperCase() === 'COMPLETE';
+                  const metrics = parseMetrics(analysisJob && analysisJob.metrics_json);
+                  const activeMetrics = parseMetrics(active && active.metrics_json);
+                  if (isComplete) {
+                    state = 'complete';
+                    width = '100%';
+                    detail = `${Number(metrics.media_files || 0).toLocaleString()} files seen`;
+                  } else if (isActive) {
+                    state = 'running';
+                    width = '100%';
+                    detail = live.detail || `${Number(activeMetrics.processed_assets || 0).toLocaleString()} files seen`;
+                  }
+                } else if (role === 'smoke') {
+                  const activeMetrics = parseMetrics(active && active.metrics_json);
+                  const smokeMetrics = parseMetrics(smokeJob && smokeJob.metrics_json);
+                  const isActive = active && String(active.job_type || '') === 'ingest' && (activeMetrics.sample_recent || Number(activeMetrics.limit || 0) === 100);
+                  const isComplete = smokeJob && String(smokeJob.status || '').toUpperCase() === 'COMPLETE';
+                  const metrics = (isActive && activeMetrics) || (isComplete && smokeMetrics) || {};
+                  const done = Number(metrics.processed_assets || 0);
+                  const total = 100;
+                  if (isComplete) {
+                    state = 'complete';
+                    width = '100%';
+                    detail = `${Math.max(done, total)} of ${total} items ingested`;
+                  } else if (isActive) {
+                    state = 'running';
+                    width = `${Math.max(0, Math.min(100, (done / total) * 100)).toFixed(1)}%`;
+                    detail = `${done} of ${total} items ingested`;
+                  }
+                }
+                widget.classList.toggle('is-active', state === 'running');
+                widget.classList.toggle('is-complete', state === 'complete');
+                widget.classList.toggle('is-pending', state === 'pending');
+                widget.classList.toggle('is-locked', state === 'locked');
+                if (fill) {
+                  fill.classList.remove('is-running', 'is-complete', 'is-idle');
+                  fill.classList.add(state === 'running' ? 'is-running' : state === 'complete' ? 'is-complete' : 'is-idle');
+                  fill.style.width = width;
+                }
+                if (status) {
+                  status.textContent = state === 'complete'
+                    ? 'Complete'
+                    : state === 'running'
+                      ? `Running · ${detail}`
+                      : detail;
+                }
+              });
+              if (onboardingComplete && window.location.pathname.includes('/app/startup/workflow')) {
+                window.location.assign('/app/assets?sort=recent');
+              }
+            };
             chooser.addEventListener('click', async function() {
               try {
                 const selected = normalizeSelection(await pickDirectory('imports'));
@@ -4075,6 +4146,16 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               }
             });
             updateControls();
+            const refreshStartup = () => {
+              fetch(`/progress?ts=${Date.now()}`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' })
+                .then((response) => response.ok ? response.json() : null)
+                .then((payload) => {
+                  if (payload) renderStartupSteps(payload);
+                })
+                .catch(() => {});
+            };
+            refreshStartup();
+            window.setInterval(refreshStartup, 2000);
           })();
         </script>
         """
@@ -4231,8 +4312,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
 
     @app.get("/progress")
     def progress():
-        _config, _resolved, db_path, _managed = _current_config()
-        return _live_progress_snapshot(db_path)
+        current_config, _resolved, db_path, _managed = _current_config()
+        snapshot = _live_progress_snapshot(db_path)
+        snapshot["onboarding_complete"] = current_config.onboarding_complete
+        return snapshot
 
     @app.get("/jobs")
     def jobs(limit: int = Query(default=20, ge=1, le=200)):
