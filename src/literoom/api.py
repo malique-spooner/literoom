@@ -3726,6 +3726,170 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         """
         return _page(page_title, body, history_html=_history_sidebar_html(db_path))
 
+    def _render_startup_workflow_page(
+        current_config: AppConfig,
+        db_path: Path,
+        resolved: Path,
+        message: Optional[str] = None,
+    ) -> str:
+        overview = manifest.get_overview(db_path)
+        metadata_overview = manifest.get_metadata_overview(db_path)
+        import_progress = manifest.get_import_progress(db_path)
+        live_progress = _live_progress_snapshot(db_path).get("live_progress", {})
+        jobs = manifest.list_jobs(db_path, limit=6)
+        latest_analysis = next((row for row in jobs if row.get("job_type") == "source_analysis"), None)
+        analysis_metrics = _json_object(latest_analysis.get("metrics_json")) if latest_analysis else {}
+        analysis_summary_html = ""
+        if analysis_metrics:
+            repeated = analysis_metrics.get("repeated_basenames") or []
+            repeated_text = ", ".join(
+                f"{escape(str(item.get('name') or 'file'))} ({int(item.get('count') or 0):,})"
+                for item in repeated[:5]
+            )
+            issue_count = len(analysis_metrics.get("source_issues") or [])
+            analysis_summary_html = f"""
+              <div class="asset-meta">{int(analysis_metrics.get('media_files') or 0):,} media files seen</div>
+              <div class="asset-meta">{int(analysis_metrics.get('duplicate_basename_groups') or 0):,} filename groups repeat</div>
+              <div class="asset-meta">{int(analysis_metrics.get('duplicate_basename_items') or 0):,} extra filename matches</div>
+              {f'<div class="asset-meta">Common repeats: {repeated_text}</div>' if repeated_text else ''}
+              <div class="asset-meta">{issue_count:,} source issue{'s' if issue_count != 1 else ''} recorded</div>
+            """
+        workspace_root_path = _setup_workspace_root(current_config, resolved)
+        workspace_root_value = str(workspace_root_path)
+        import_dir_value = str((workspace_root_path / "imports").resolve())
+        managed_library_dir_value = _rooted_path(workspace_root_path, current_config.paths.managed_library_dir)
+        derivatives_dir_value = _rooted_path(workspace_root_path, current_config.paths.derivatives_dir)
+        logs_dir_value = _rooted_path(workspace_root_path, current_config.paths.logs_dir)
+        temp_dir_value = _rooted_path(workspace_root_path, current_config.paths.temp_dir)
+        db_path_value = _rooted_path(workspace_root_path, current_config.paths.db_path)
+        flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
+        live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
+        body = f"""
+          <div class="toolbar">
+            <div class="title">
+              <h1>Welcome to Literoom</h1>
+              <p>Pick the import and library folders, then prove the newest 100 images and videos before you run anything bigger.</p>
+            </div>
+          </div>
+        {flash}
+        <section class="card section">
+          <div class="section-header">
+            <h2>1. Choose folders</h2>
+            <p>Literoom reads your folders locally and saves the paths for this Mac only.</p>
+          </div>
+          <form method="get" action="/app/settings/save" id="startup-settings-form" data-auto-submit="true">
+            <input type="hidden" name="workspace_root" id="startup-workspace-root-input" value="{escape(workspace_root_value)}">
+            <input type="hidden" name="sources_text" id="startup-sources_text" value="">
+            <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
+            <input type="hidden" name="managed_library_dir_value" id="startup-managed_library_dir_value" value="{escape(managed_library_dir_value)}">
+            <input type="hidden" name="derivatives_dir_value" id="startup-derivatives_dir_value" value="{escape(derivatives_dir_value)}">
+            <input type="hidden" name="logs_dir_value" value="{escape(logs_dir_value)}">
+            <input type="hidden" name="temp_dir_value" value="{escape(temp_dir_value)}">
+            <label class="field" style="grid-column:1 / -1; margin-bottom:24px;">
+              <span>Import folder</span>
+              <div class="import-picker">
+                <div class="button-row">
+                  <button class="btn secondary" type="button" id="startup-choose-import-folder">Select import folder…</button>
+                </div>
+                <div class="asset-meta" id="startup-chosen-import-folder" style="font-size:.92rem;">{escape(import_dir_value)}</div>
+              </div>
+            </label>
+            <label class="field" style="grid-column:1 / -1; margin-top:8px;">
+              <span>Library folder</span>
+              <div class="import-picker">
+                <div class="button-row">
+                  <button class="btn secondary" type="button" id="startup-choose-library-folder">Select library folder…</button>
+                </div>
+                <div class="asset-meta" id="startup-chosen-library-folder" style="font-size:.92rem;">{escape(managed_library_dir_value)}</div>
+              </div>
+            </label>
+          </form>
+        </section>
+        <section class="card section">
+          <div class="section-header">
+            <h2>2. Check the imports</h2>
+            <p>Start with a quick scan so you can spot repeated names or source issues before the smoke test.</p>
+          </div>
+          {analysis_summary_html}
+          <div class="button-row" style="margin-top:14px;">
+            <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Inspect imports</button></a>
+          </div>
+        </section>
+        <section class="card section">
+          <div class="section-header">
+            <h2>3. Prove ingest on a small sample</h2>
+            <p>Smoke ingest uses the newest 100 images and videos. It stops there so you can verify the pipeline first.</p>
+          </div>
+          <div class="button-row" style="margin-top:14px;">
+            <a href="/app/actions/test-ingest"><button class="btn" type="button">Smoke ingest (100 recent)</button></a>
+          </div>
+        </section>
+        <section class="system-top" style="margin-top:24px;">
+          <section class="system-card"><h3>Library</h3><div class="big">{overview.get('assets_total', 0)}</div><div class="asset-meta">items ready to browse</div></section>
+          <section class="system-card"><h3>Coverage</h3><div class="big">{metadata_overview.get('average_metadata_score', 0)}</div><div class="asset-meta">average metadata coverage</div></section>
+          <section class="system-card"><h3>Imports</h3><div class="big">{import_progress.get('completion_pct', 0)}%</div><div class="asset-meta">pipeline completion</div></section>
+        </section>
+        """
+        body += """
+        <script>
+          (function() {
+            const workspaceRoot = document.getElementById('startup-workspace-root-input');
+            const chooser = document.getElementById('startup-choose-import-folder');
+            const libraryChooser = document.getElementById('startup-choose-library-folder');
+            const field = document.getElementById('startup-sources_text');
+            const label = document.getElementById('startup-chosen-import-folder');
+            const libraryField = document.getElementById('startup-managed_library_dir_value');
+            const libraryLabel = document.getElementById('startup-chosen-library-folder');
+            const form = document.getElementById('startup-settings-form');
+            if (!chooser || !libraryChooser || !field || !label || !libraryField || !libraryLabel || !form) return;
+            const prettyPath = (folderName) => {
+              const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\\/+$/, '');
+              const clean = String(folderName || '').replace(/^\\/+/, '');
+              if (!clean) return root;
+              if (!root) return clean;
+              return `${root}/${clean}`;
+            };
+            const pickDirectory = async (fallbackName) => {
+              if (window.showDirectoryPicker) {
+                const handle = await window.showDirectoryPicker({ mode: 'read' });
+                if (handle && handle.name) return handle.name;
+              }
+              return fallbackName;
+            };
+            if (workspaceRoot) {
+              workspaceRoot.addEventListener('change', function() {
+                label.textContent = prettyPath(field.value || 'imports');
+                libraryLabel.textContent = prettyPath(libraryField.value || 'library');
+                form.requestSubmit();
+              });
+            }
+            chooser.addEventListener('click', async function() {
+              try {
+                const selected = await pickDirectory('imports');
+                if (!selected) return;
+                field.value = selected;
+                label.textContent = prettyPath(selected);
+                form.submit();
+              } catch (error) {
+                console.error(error);
+              }
+            });
+            libraryChooser.addEventListener('click', async function() {
+              try {
+                const selected = await pickDirectory('library');
+                if (!selected) return;
+                libraryField.value = selected;
+                libraryLabel.textContent = prettyPath(selected);
+                form.submit();
+              } catch (error) {
+                console.error(error);
+              }
+            });
+          })();
+        </script>
+        """
+        return _page("Welcome to Literoom", body, history_html=_history_sidebar_html(db_path))
+
     def _run_ingest_background(job_id: str, *, limit: Optional[int] = None, sample_recent: bool = False):
         if not auto_sync_lock.acquire(blocking=False):
             return
@@ -4283,20 +4447,25 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         current_config, resolved, db_path, _managed = _current_config()
         if _needs_first_run_setup(current_config):
             setup_message = message or "Choose your workspace and import folders to get started."
-            return _render_system_page(
+            return _render_startup_workflow_page(
                 current_config,
                 db_path,
                 resolved,
                 setup_message,
-                show_run_now=False,
-                page_title="Welcome to Literoom",
-                page_heading="Choose your folders to begin",
             )
         return _render_dashboard(current_config, db_path, resolved, message)
 
     @app.get("/app/system", response_class=HTMLResponse)
     def system_page(message: Optional[str] = None):
         current_config, resolved, db_path, _managed = _current_config()
+        if _needs_first_run_setup(current_config):
+            setup_message = message or "Choose your workspace and import folders to get started."
+            return _render_startup_workflow_page(
+                current_config,
+                db_path,
+                resolved,
+                setup_message,
+            )
         return _render_system_page(current_config, db_path, resolved, message)
 
     @app.get("/app/settings", response_class=HTMLResponse)
@@ -4336,7 +4505,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <div class="section-header">
             <h2>What this does</h2>
           </div>
-          <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the welcome screen to pick import and library folders again.</div>
+          <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the startup workflow to pick import and library folders again.</div>
         </section>
         """
         return _page("Startup", body, history_html=_history_sidebar_html(db_path))
@@ -4345,7 +4514,20 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     def startup_confirm():
         current_config, resolved, db_path, _managed = _current_config()
         _wipe_workspace_data(current_config, resolved, clear_sources=True)
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url="/app/startup/workflow", status_code=303)
+
+    @app.get("/app/startup/workflow", response_class=HTMLResponse)
+    def startup_workflow(message: Optional[str] = None):
+        current_config, resolved, db_path, _managed = _current_config()
+        if not _needs_first_run_setup(current_config):
+            return RedirectResponse(url="/app/system", status_code=303)
+        setup_message = message or "Choose your folders and run the smoke ingest before anything bigger."
+        return _render_startup_workflow_page(
+            current_config,
+            db_path,
+            resolved,
+            setup_message,
+        )
 
     @app.get("/app/people", response_class=HTMLResponse)
     def people_page(

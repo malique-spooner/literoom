@@ -108,9 +108,11 @@ class DedupeTests(unittest.TestCase):
             page = client.get("/")
             self.assertEqual(page.status_code, 200)
             self.assertIn("Welcome to Literoom", page.text)
-            self.assertIn("Choose your folders to begin", page.text)
+            self.assertIn("Pick the import and library folders", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
+            self.assertIn("Inspect imports", page.text)
+            self.assertIn("Smoke ingest (100 recent)", page.text)
             self.assertNotIn('type="file"', page.text)
             self.assertNotIn("webkitdirectory", page.text)
             if DEFAULT_WORKSPACE_ROOT.exists():
