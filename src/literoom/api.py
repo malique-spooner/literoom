@@ -1891,6 +1891,8 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       }}
       .progress-fill.is-running {{
         background: linear-gradient(90deg, #0a84ff, #7ab7ff);
+        background-size: 180% 100%;
+        animation: progress-pan 1.1s linear infinite;
       }}
       .progress-fill.is-complete {{
         background: linear-gradient(90deg, #18a957, #7adf9b);
@@ -1898,6 +1900,30 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
       }}
       .progress-fill.is-idle {{
         background: linear-gradient(90deg, rgba(15,23,42,.18), rgba(15,23,42,.34));
+      }}
+      .progress-status {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }}
+      .progress-spinner {{
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        border: 2px solid rgba(10,132,255,.22);
+        border-top-color: #0a84ff;
+        flex: 0 0 auto;
+        animation: progress-spin .8s linear infinite;
+      }}
+      .progress-spinner.is-hidden {{
+        display: none;
+      }}
+      @keyframes progress-spin {{
+        to {{ transform: rotate(360deg); }}
+      }}
+      @keyframes progress-pan {{
+        from {{ background-position: 0% 0; }}
+        to {{ background-position: 180% 0; }}
       }}
       .status-pill {{
         display: inline-flex;
@@ -2110,6 +2136,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
               const value = widget.querySelector('[data-live-progress-value]');
               const copy = widget.querySelector('[data-live-progress-copy]');
               const detail = widget.querySelector('[data-live-progress-detail]');
+              const spinner = widget.querySelector('[data-live-progress-spinner]');
               const pct = live.percent_complete;
               const hasTotal = Number.isFinite(pct);
               const state = live.state || (hasTotal && Number(pct) >= 100 ? 'complete' : 'idle');
@@ -2121,10 +2148,10 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
                 fill.classList.add(state === 'running' || state === 'queued' ? 'is-running' : state === 'complete' ? 'is-complete' : 'is-idle');
               }}
               if (fill) {{
-                fill.style.width = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : '0%';
+                fill.style.width = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : (state === 'running' || state === 'queued' ? '100%' : '0%');
               }}
               if (value) {{
-                value.textContent = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : (done ? `${{done}} done` : 'Waiting');
+                value.textContent = hasTotal ? `${{Math.max(0, Math.min(100, pct)).toFixed(1)}}%` : (state === 'running' || state === 'queued' ? (done ? `${{done}} done` : 'Running') : (done ? `${{done}} done` : 'Waiting'));
               }}
               if (copy) {{
                 copy.textContent = hasTotal
@@ -2135,6 +2162,9 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
               if (detail) {{
                 detail.textContent = state === 'idle' ? '' : (live.detail || '');
                 detail.style.display = detail.textContent ? '' : 'none';
+              }}
+              if (spinner) {{
+                spinner.classList.toggle('is-hidden', !(state === 'running' || state === 'queued'));
               }}
               widget.dataset.liveState = state;
             }});
@@ -3580,7 +3610,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <section class="system-top">
             <section class="system-card" data-live-progress-widget>
               <h3>Imports</h3>
-              <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
+              <div class="progress-status">
+                <span class="progress-spinner is-hidden" data-live-progress-spinner aria-hidden="true"></span>
+                <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
+              </div>
               <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
               <div class="progress-shell" style="margin-top:12px;">
               <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
@@ -3846,9 +3879,20 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <div class="asset-meta">Other pages stay locked until the onboarding smoke test is complete.</div>
         </section>
         <section class="system-top" style="margin-top:24px;">
+          <section class="system-card" data-live-progress-widget>
+            <h3>Imports</h3>
+            <div class="progress-status">
+              <span class="progress-spinner is-hidden" data-live-progress-spinner aria-hidden="true"></span>
+              <div class="big" data-live-progress-value>{import_progress.get('completion_pct', 0)}%</div>
+            </div>
+            <div class="asset-meta" data-live-progress-copy>{import_progress.get('ready_assets', 0)} ready</div>
+            <div class="progress-shell" style="margin-top:12px;">
+              <div class="progress-track"><div class="progress-fill" data-live-progress-fill style="width:{import_progress.get('completion_pct', 0)}%"></div></div>
+              <div class="asset-meta" data-live-progress-detail{live_detail_attr}>{escape(str(live_progress.get('detail') or ''))}</div>
+            </div>
+          </section>
           <section class="system-card"><h3>Library</h3><div class="big">{overview.get('assets_total', 0)}</div><div class="asset-meta">items ready to browse</div></section>
           <section class="system-card"><h3>Coverage</h3><div class="big">{metadata_overview.get('average_metadata_score', 0)}</div><div class="asset-meta">average metadata coverage</div></section>
-          <section class="system-card"><h3>Imports</h3><div class="big">{import_progress.get('completion_pct', 0)}%</div><div class="asset-meta">pipeline completion</div></section>
         </section>
         """
         body += """
