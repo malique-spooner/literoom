@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 import json
 import mimetypes
+import shutil
 import sys
 import threading
 from urllib.parse import quote_plus
@@ -2897,6 +2898,60 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             return DEFAULT_WORKSPACE_ROOT.resolve()
         return current_config.resolve_root(resolved)
 
+    def _wipe_workspace_data(current_config: AppConfig, resolved: Path, *, clear_sources: bool) -> dict[str, object]:
+        db_path = current_config.db_path(resolved)
+        managed_dir = current_config.managed_library_dir(resolved)
+        derivatives_dir = current_config.derivatives_dir(resolved)
+        logs_dir = current_config.logs_dir(resolved)
+        temp_dir = current_config.temp_dir(resolved)
+        cleared_paths: list[str] = []
+        for target in (db_path, managed_dir, derivatives_dir, logs_dir, temp_dir):
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                    cleared_paths.append(str(target))
+                elif target.exists():
+                    target.unlink()
+                    cleared_paths.append(str(target))
+            except FileNotFoundError:
+                continue
+        updated_config = AppConfig(
+            workspace_root=current_config.workspace_root,
+            sources=[] if clear_sources else list(current_config.sources),
+            paths=current_config.paths.__class__(
+                db_path=current_config.paths.db_path,
+                managed_library_dir=current_config.paths.managed_library_dir,
+                derivatives_dir=current_config.paths.derivatives_dir,
+                logs_dir=current_config.paths.logs_dir,
+                temp_dir=current_config.paths.temp_dir,
+            ),
+            tools=current_config.tools.__class__(
+                exiftool=current_config.tools.exiftool,
+                ffmpeg=current_config.tools.ffmpeg,
+                tesseract=current_config.tools.tesseract,
+                vips=current_config.tools.vips,
+                clip_model=current_config.tools.clip_model,
+                face_model=current_config.tools.face_model,
+            ),
+            pipeline=current_config.pipeline.__class__(
+                batch_size=current_config.pipeline.batch_size,
+                max_workers=current_config.pipeline.max_workers,
+                image_thumbnail_size=current_config.pipeline.image_thumbnail_size,
+                video_preview_offset_seconds=current_config.pipeline.video_preview_offset_seconds,
+                managed_naming=current_config.pipeline.managed_naming,
+                auto_sync_enabled=False,
+                auto_sync_interval_seconds=current_config.pipeline.auto_sync_interval_seconds,
+            ),
+            thresholds=current_config.thresholds.__class__(
+                image_phash_distance=current_config.thresholds.image_phash_distance,
+                video_frame_phash_distance=current_config.thresholds.video_frame_phash_distance,
+            ),
+        )
+        save_config(updated_config, config_path)
+        updated_config.ensure_workspace_dirs(resolved)
+        manifest.init_db(updated_config.db_path(resolved))
+        return {"cleared_paths": cleared_paths, "cleared_sources": clear_sources}
+
     def _rooted_path(root: Path, raw_value: str) -> str:
         path = Path(raw_value)
         if path.is_absolute():
@@ -3548,6 +3603,17 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             </div>
             ''' if show_run_now else ''}
           </section>
+          {'''
+          <section class="card section">
+            <div class="section-header">
+              <h2>Recovery</h2>
+            </div>
+            <div class="button-row">
+              <a href="/app/actions/factory-reset"><button class="btn secondary" type="button">Factory reset</button></a>
+              <a href="/app/actions/first-startup"><button class="btn secondary" type="button">First startup</button></a>
+            </div>
+          </section>
+          ''' if show_run_now else ''}
           <section class="card section">
             <div class="section-header">
               <h2>Stack</h2>
@@ -4251,6 +4317,64 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     @app.get("/app/metadata", response_class=HTMLResponse)
     def metadata_page(field: Optional[str] = None):
         return RedirectResponse(url="/app/system", status_code=303)
+
+    @app.get("/app/actions/factory-reset", response_class=HTMLResponse)
+    def factory_reset_page():
+        _config, _resolved, db_path, _managed = _current_config()
+        body = f"""
+        <div class="toolbar">
+          <div class="title">
+            <h1>Factory reset</h1>
+            <p>Clear Literoom data and start fresh while keeping your import folders intact.</p>
+          </div>
+          <div class="button-row">
+            <a href="/app/system"><button class="btn secondary" type="button">Cancel</button></a>
+            <a href="/app/actions/factory-reset/confirm"><button class="btn" type="button">Confirm reset</button></a>
+          </div>
+        </div>
+        <section class="card section">
+          <div class="section-header">
+            <h2>What this does</h2>
+          </div>
+          <div class="asset-meta">Deletes the database and generated app data. Your import folders are left alone.</div>
+        </section>
+        """
+        return _page("Factory reset", body, history_html=_history_sidebar_html(db_path))
+
+    @app.get("/app/actions/factory-reset/confirm")
+    def factory_reset_confirm():
+        current_config, resolved, db_path, _managed = _current_config()
+        _wipe_workspace_data(current_config, resolved, clear_sources=False)
+        return RedirectResponse(url="/app/system?message=Factory+reset+complete", status_code=303)
+
+    @app.get("/app/actions/first-startup", response_class=HTMLResponse)
+    def first_startup_page():
+        _config, _resolved, db_path, _managed = _current_config()
+        body = f"""
+        <div class="toolbar">
+          <div class="title">
+            <h1>First startup</h1>
+            <p>Rewind Literoom to the onboarding flow without deleting your import folders.</p>
+          </div>
+          <div class="button-row">
+            <a href="/app/system"><button class="btn secondary" type="button">Cancel</button></a>
+            <a href="/app/actions/first-startup/confirm"><button class="btn" type="button">Confirm first startup</button></a>
+          </div>
+        </div>
+        <section class="card section">
+          <div class="section-header">
+            <h2>What this does</h2>
+          </div>
+          <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the welcome screen.</div>
+        </section>
+        """
+        return _page("First startup", body, history_html=_history_sidebar_html(db_path))
+
+    @app.get("/app/actions/first-startup/confirm")
+    def first_startup_confirm():
+        current_config, resolved, db_path, _managed = _current_config()
+        _wipe_workspace_data(current_config, resolved, clear_sources=True)
+        return RedirectResponse(url="/", status_code=303)
 
     @app.get("/app/people", response_class=HTMLResponse)
     def people_page(
