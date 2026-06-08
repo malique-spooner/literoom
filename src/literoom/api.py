@@ -3609,7 +3609,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               <h2>Startup</h2>
             </div>
             <div class="button-row">
-              <a href="/app/actions/first-startup"><button class="btn secondary" type="button">First startup</button></a>
+              <a href="/app/startup"><button class="btn secondary" type="button">First startup</button></a>
             </div>
           </section>
           ''' if show_run_now else ''}
@@ -4318,18 +4318,18 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
     def metadata_page(field: Optional[str] = None):
         return RedirectResponse(url="/app/system", status_code=303)
 
-    @app.get("/app/actions/first-startup", response_class=HTMLResponse)
-    def first_startup_page():
+    @app.get("/app/startup", response_class=HTMLResponse)
+    def startup_page():
         _config, _resolved, db_path, _managed = _current_config()
         body = f"""
         <div class="toolbar">
           <div class="title">
-            <h1>First startup</h1>
+            <h1>Startup</h1>
             <p>Reset Literoom to the onboarding flow so you can choose the import and library folders again.</p>
           </div>
           <div class="button-row">
             <a href="/app/system"><button class="btn secondary" type="button">Cancel</button></a>
-            <a href="/app/actions/first-startup/confirm"><button class="btn" type="button">Confirm reset</button></a>
+            <a href="/app/startup/confirm"><button class="btn" type="button">Confirm reset</button></a>
           </div>
         </div>
         <section class="card section">
@@ -4339,10 +4339,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <div class="asset-meta">Deletes the database, clears saved source selections, and sends you back to the welcome screen to pick import and library folders again.</div>
         </section>
         """
-        return _page("First startup", body, history_html=_history_sidebar_html(db_path))
+        return _page("Startup", body, history_html=_history_sidebar_html(db_path))
 
-    @app.get("/app/actions/first-startup/confirm")
-    def first_startup_confirm():
+    @app.get("/app/startup/confirm")
+    def startup_confirm():
         current_config, resolved, db_path, _managed = _current_config()
         _wipe_workspace_data(current_config, resolved, clear_sources=True)
         return RedirectResponse(url="/", status_code=303)

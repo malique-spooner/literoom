@@ -58,7 +58,7 @@ class RecoveryTests(unittest.TestCase):
             self._write_config(config_path, db_path, managed, derived, root, [import_dir])
             client = TestClient(create_app(config_path))
 
-            response = client.get("/app/actions/first-startup/confirm", follow_redirects=False)
+            response = client.get("/app/startup/confirm", follow_redirects=False)
 
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/")
