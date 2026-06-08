@@ -121,6 +121,7 @@ class DedupeTests(unittest.TestCase):
             self.assertIn("No library folder selected", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
+            self.assertNotIn("Save folder choices", page.text)
             self.assertIn("Inspect imports", page.text)
             self.assertIn("Smoke ingest (100 recent)", page.text)
             self.assertNotIn('type="file"', page.text)

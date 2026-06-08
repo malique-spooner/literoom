@@ -3762,6 +3762,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             """
         workspace_root_path = _setup_workspace_root(current_config, resolved)
         workspace_root_value = str(workspace_root_path)
+        selected_imports_value = "\n".join(current_config.sources) if current_config.startup_import_ready and current_config.sources else ""
         selected_imports = ", ".join(current_config.sources) if current_config.startup_import_ready and current_config.sources else ""
         selected_library = (
             current_config.paths.managed_library_dir
@@ -3792,7 +3793,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </div>
           <form method="get" action="/app/startup/save" id="startup-settings-form">
             <input type="hidden" name="workspace_root" id="startup-workspace-root-input" value="{escape(workspace_root_value)}">
-            <input type="hidden" name="sources_text" id="startup-sources_text" value="">
+            <input type="hidden" name="sources_text" id="startup-sources_text" value="{escape(selected_imports_value)}">
             <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
             <input type="hidden" name="managed_library_dir_value" id="startup-managed_library_dir_value" value="{escape(managed_library_dir_value)}">
             <input type="hidden" name="derivatives_dir_value" id="startup-derivatives_dir_value" value="{escape(derivatives_dir_value)}">
@@ -3816,9 +3817,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <div class="asset-meta" id="startup-chosen-library-folder" style="font-size:.92rem;">{escape(library_label_value)}</div>
               </div>
             </label>
-            <div class="button-row" style="margin-top:18px;">
-              <button class="btn" type="submit" id="startup-save-folders">Save folder choices</button>
-            </div>
           </form>
         </section>
         <section class="card section">
@@ -3864,16 +3862,23 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             const libraryField = document.getElementById('startup-managed_library_dir_value');
             const libraryLabel = document.getElementById('startup-chosen-library-folder');
             const form = document.getElementById('startup-settings-form');
-            const saveButton = document.getElementById('startup-save-folders');
             const inspectButton = document.getElementById('startup-inspect-imports');
             const smokeButton = document.getElementById('startup-smoke-ingest');
             if (!chooser || !libraryChooser || !field || !label || !libraryField || !libraryLabel || !form) return;
+            let submitting = false;
+            const normalizeSelection = (selected) => String(selected || '').trim();
             const updateControls = () => {
               const hasImport = Boolean(String(field.value || '').trim());
               const hasLibrary = Boolean(String(libraryField.value || '').trim());
-              if (saveButton) saveButton.disabled = !(hasImport || hasLibrary);
               if (inspectButton) inspectButton.disabled = !(hasImport && hasLibrary);
               if (smokeButton) smokeButton.disabled = !(hasImport && hasLibrary);
+            };
+            const submitIfReady = () => {
+              if (submitting) return;
+              if (String(field.value || '').trim() && String(libraryField.value || '').trim()) {
+                submitting = true;
+                form.submit();
+              }
             };
             const pickDirectory = async (fallbackName) => {
               if (window.showDirectoryPicker) {
@@ -3889,24 +3894,24 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             }
             chooser.addEventListener('click', async function() {
               try {
-                const selected = await pickDirectory('imports');
+                const selected = normalizeSelection(await pickDirectory('imports'));
                 if (!selected) return;
                 field.value = selected;
                 label.textContent = selected;
                 updateControls();
-                form.submit();
+                submitIfReady();
               } catch (error) {
                 console.error(error);
               }
             });
             libraryChooser.addEventListener('click', async function() {
               try {
-                const selected = await pickDirectory('library');
+                const selected = normalizeSelection(await pickDirectory('library'));
                 if (!selected) return;
                 libraryField.value = selected;
                 libraryLabel.textContent = selected;
                 updateControls();
-                form.submit();
+                submitIfReady();
               } catch (error) {
                 console.error(error);
               }

@@ -74,12 +74,53 @@ class RecoveryTests(unittest.TestCase):
             self.assertIn("No library folder selected", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
+            self.assertNotIn("Save folder choices", page.text)
             self.assertIn("Inspect imports", page.text)
             self.assertIn("Smoke ingest (100 recent)", page.text)
             self.assertNotIn("Run full ingest", page.text)
             locked_page = client.get("/app/system")
             self.assertEqual(locked_page.status_code, 200)
             self.assertIn("Welcome to Literoom", locked_page.text)
+
+    def test_startup_workflow_retains_import_selection_until_library_is_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            import_dir = root / "imports"
+            managed.mkdir()
+            derived.mkdir()
+            import_dir.mkdir()
+            manifest.init_db(db_path)
+
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "workspace_root: .",
+                        f"startup_import_ready: true",
+                        f"startup_library_ready: false",
+                        f"onboarding_complete: false",
+                        "sources:",
+                        f"  - {import_dir}",
+                        "paths:",
+                        f"  db_path: {db_path}",
+                        f"  managed_library_dir: {managed}",
+                        f"  derivatives_dir: {derived}",
+                        f"  logs_dir: {root / 'logs'}",
+                        f"  temp_dir: {root / 'tmp'}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            client = TestClient(create_app(config_path))
+
+            page = client.get("/app/startup/workflow")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(str(import_dir), page.text)
+            self.assertIn("No library folder selected", page.text)
+            self.assertNotIn("Save folder choices", page.text)
 
 
 if __name__ == "__main__":
