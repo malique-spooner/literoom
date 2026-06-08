@@ -59,6 +59,9 @@ class ThresholdConfig:
 class AppConfig:
     workspace_root: str = "."
     sources: List[str] = field(default_factory=list)
+    startup_import_ready: bool = False
+    startup_library_ready: bool = False
+    onboarding_complete: bool = False
     paths: WorkspacePaths = field(default_factory=WorkspacePaths)
     tools: ToolPaths = field(default_factory=ToolPaths)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
@@ -292,6 +295,9 @@ def load_config(config_path: Path | str = DEFAULT_CONFIG_PATH) -> tuple[AppConfi
     cfg = AppConfig(
         workspace_root=payload.get("workspace_root", "."),
         sources=list(payload.get("sources", [])),
+        startup_import_ready=bool(payload.get("startup_import_ready", False)),
+        startup_library_ready=bool(payload.get("startup_library_ready", False)),
+        onboarding_complete=bool(payload.get("onboarding_complete", False)),
         paths=_merge_dataclass(WorkspacePaths, payload.get("paths", {})),
         tools=_merge_dataclass(ToolPaths, payload.get("tools", {})),
         pipeline=_merge_dataclass(PipelineConfig, payload.get("pipeline", {})),

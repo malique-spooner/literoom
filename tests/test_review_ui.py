@@ -32,6 +32,7 @@ class ReviewUiTests(unittest.TestCase):
                     "workspace_root: .",
                     "sources:",
                     f"  - {import_dir}",
+                    "onboarding_complete: true",
                     "paths:",
                     f"  db_path: {db_path}",
                     f"  managed_library_dir: {managed}",

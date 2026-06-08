@@ -9,7 +9,6 @@ from unittest import mock
 from PIL import Image, ImageDraw
 
 from literoom import dedupe
-from literoom.config import DEFAULT_WORKSPACE_ROOT
 from literoom.metadata import manifest
 
 try:
@@ -26,12 +25,21 @@ except Exception:
 @unittest.skipUnless(FASTAPI_AVAILABLE, "fastapi is not installed")
 class DedupeTests(unittest.TestCase):
     @staticmethod
-    def _write_config(config_path: Path, db_path: Path, managed: Path, derived: Path, root: Path):
+    def _write_config(
+        config_path: Path,
+        db_path: Path,
+        managed: Path,
+        derived: Path,
+        root: Path,
+        *,
+        onboarding_complete: bool = True,
+    ):
         config_path.write_text(
             "\n".join(
                 [
                     "workspace_root: .",
                     "sources: []",
+                    f"onboarding_complete: {'true' if onboarding_complete else 'false'}",
                     "paths:",
                     f"  db_path: {db_path}",
                     f"  managed_library_dir: {managed}",
@@ -102,23 +110,29 @@ class DedupeTests(unittest.TestCase):
             manifest.init_db(db_path)
 
             config_path = root / "config.yaml"
-            self._write_config(config_path, db_path, managed, derived, root)
+            self._write_config(config_path, db_path, managed, derived, root, onboarding_complete=False)
             client = TestClient(create_app(config_path))
 
             page = client.get("/")
             self.assertEqual(page.status_code, 200)
             self.assertIn("Welcome to Literoom", page.text)
             self.assertIn("Pick the import and library folders", page.text)
+            self.assertIn("No import folder selected", page.text)
+            self.assertIn("No library folder selected", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
             self.assertIn("Inspect imports", page.text)
             self.assertIn("Smoke ingest (100 recent)", page.text)
             self.assertNotIn('type="file"', page.text)
             self.assertNotIn("webkitdirectory", page.text)
-            if DEFAULT_WORKSPACE_ROOT.exists():
-                self.assertIn(str(DEFAULT_WORKSPACE_ROOT.resolve()), page.text)
             self.assertNotIn("Run full ingest", page.text)
             self.assertNotIn("We keep this love in a photograph", page.text)
+            locked_page = client.get("/app/system")
+            self.assertEqual(locked_page.status_code, 200)
+            self.assertIn("Welcome to Literoom", locked_page.text)
+            assets_page = client.get("/app/assets")
+            self.assertEqual(assets_page.status_code, 200)
+            self.assertIn("Welcome to Literoom", assets_page.text)
 
     def test_duplicate_group_can_be_resolved_via_app(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -464,6 +478,7 @@ class DedupeTests(unittest.TestCase):
                         "workspace_root: .",
                         "sources:",
                         f"  - {import_dir}",
+                        "onboarding_complete: true",
                         "paths:",
                         f"  db_path: {db_path}",
                         f"  managed_library_dir: {managed}",
@@ -528,6 +543,7 @@ class DedupeTests(unittest.TestCase):
                         "workspace_root: .",
                         "sources:",
                         f"  - {import_dir}",
+                        "onboarding_complete: true",
                         "paths:",
                         f"  db_path: {db_path}",
                         f"  managed_library_dir: {managed}",
@@ -592,6 +608,7 @@ class DedupeTests(unittest.TestCase):
                         "workspace_root: .",
                         "sources:",
                         f"  - {import_dir}",
+                        "onboarding_complete: true",
                         "paths:",
                         f"  db_path: {db_path}",
                         f"  library_dir: {managed}",
@@ -653,6 +670,7 @@ class DedupeTests(unittest.TestCase):
                     [
                         "workspace_root: .",
                         "sources: []",
+                        "onboarding_complete: true",
                         "paths:",
                         f"  db_path: {db_path}",
                         f"  managed_library_dir: {managed}",

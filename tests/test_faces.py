@@ -33,6 +33,7 @@ class FacesTests(unittest.TestCase):
                 [
                     "workspace_root: .",
                     "sources: []",
+                    "onboarding_complete: true",
                     "paths:",
                     f"  db_path: {db_path}",
                     f"  managed_library_dir: {managed}",

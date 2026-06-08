@@ -17,7 +17,7 @@ from urllib.parse import quote_plus
 from PIL import Image
 
 try:  # optional at import time so core tests can run without FastAPI installed
-    from fastapi import FastAPI, HTTPException, Query
+    from fastapi import FastAPI, HTTPException, Query, Request
     from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 except Exception:  # pragma: no cover - optional dependency fallback
     FastAPI = None  # type: ignore[assignment]
@@ -2891,7 +2891,10 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         return current_config, resolved, current_db_path, current_managed
 
     def _needs_first_run_setup(current_config: AppConfig) -> bool:
-        return not current_config.sources
+        return not current_config.onboarding_complete
+
+    def _startup_state_complete(current_config: AppConfig) -> bool:
+        return bool(current_config.onboarding_complete)
 
     def _setup_workspace_root(current_config: AppConfig, resolved: Path) -> Path:
         if _needs_first_run_setup(current_config) and DEFAULT_WORKSPACE_ROOT.exists():
@@ -2918,6 +2921,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         updated_config = AppConfig(
             workspace_root=current_config.workspace_root,
             sources=[] if clear_sources else list(current_config.sources),
+            startup_import_ready=False,
+            startup_library_ready=False,
+            onboarding_complete=False,
             paths=current_config.paths.__class__(
                 db_path=current_config.paths.db_path,
                 managed_library_dir=current_config.paths.managed_library_dir,
@@ -3756,12 +3762,19 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             """
         workspace_root_path = _setup_workspace_root(current_config, resolved)
         workspace_root_value = str(workspace_root_path)
-        import_dir_value = str((workspace_root_path / "imports").resolve())
-        managed_library_dir_value = _rooted_path(workspace_root_path, current_config.paths.managed_library_dir)
-        derivatives_dir_value = _rooted_path(workspace_root_path, current_config.paths.derivatives_dir)
-        logs_dir_value = _rooted_path(workspace_root_path, current_config.paths.logs_dir)
-        temp_dir_value = _rooted_path(workspace_root_path, current_config.paths.temp_dir)
-        db_path_value = _rooted_path(workspace_root_path, current_config.paths.db_path)
+        selected_imports = ", ".join(current_config.sources) if current_config.startup_import_ready and current_config.sources else ""
+        selected_library = (
+            current_config.paths.managed_library_dir
+            if current_config.startup_library_ready and current_config.paths.managed_library_dir
+            else ""
+        )
+        import_label_value = selected_imports or "No import folder selected"
+        library_label_value = selected_library or "No library folder selected"
+        managed_library_dir_value = current_config.paths.managed_library_dir if current_config.startup_library_ready else ""
+        derivatives_dir_value = current_config.paths.derivatives_dir
+        logs_dir_value = current_config.paths.logs_dir
+        temp_dir_value = current_config.paths.temp_dir
+        db_path_value = current_config.paths.db_path
         flash = f"<div class='flash'>{escape(message)}</div>" if message else ""
         live_detail_attr = "" if live_progress.get("detail") else ' style="display:none;"'
         body = f"""
@@ -3775,9 +3788,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         <section class="card section">
           <div class="section-header">
             <h2>1. Choose folders</h2>
-            <p>Literoom reads your folders locally and saves the paths for this Mac only.</p>
+            <p>Choose both folders first. Nothing is uploaded, and the page stays here until the smoke test is complete.</p>
           </div>
-          <form method="get" action="/app/settings/save" id="startup-settings-form" data-auto-submit="true">
+          <form method="get" action="/app/startup/save" id="startup-settings-form">
             <input type="hidden" name="workspace_root" id="startup-workspace-root-input" value="{escape(workspace_root_value)}">
             <input type="hidden" name="sources_text" id="startup-sources_text" value="">
             <input type="hidden" name="db_path_value" value="{escape(db_path_value)}">
@@ -3791,7 +3804,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <div class="button-row">
                   <button class="btn secondary" type="button" id="startup-choose-import-folder">Select import folder…</button>
                 </div>
-                <div class="asset-meta" id="startup-chosen-import-folder" style="font-size:.92rem;">{escape(import_dir_value)}</div>
+                <div class="asset-meta" id="startup-chosen-import-folder" style="font-size:.92rem;">{escape(import_label_value)}</div>
               </div>
             </label>
             <label class="field" style="grid-column:1 / -1; margin-top:8px;">
@@ -3800,9 +3813,12 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 <div class="button-row">
                   <button class="btn secondary" type="button" id="startup-choose-library-folder">Select library folder…</button>
                 </div>
-                <div class="asset-meta" id="startup-chosen-library-folder" style="font-size:.92rem;">{escape(managed_library_dir_value)}</div>
+                <div class="asset-meta" id="startup-chosen-library-folder" style="font-size:.92rem;">{escape(library_label_value)}</div>
               </div>
             </label>
+            <div class="button-row" style="margin-top:18px;">
+              <button class="btn" type="submit" id="startup-save-folders">Save folder choices</button>
+            </div>
           </form>
         </section>
         <section class="card section">
@@ -3812,7 +3828,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           </div>
           {analysis_summary_html}
           <div class="button-row" style="margin-top:14px;">
-            <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button">Inspect imports</button></a>
+            <a href="/app/actions/analyze-imports"><button class="btn secondary" type="button" id="startup-inspect-imports">Inspect imports</button></a>
           </div>
         </section>
         <section class="card section">
@@ -3821,8 +3837,15 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             <p>Smoke ingest uses the newest 100 images and videos. It stops there so you can verify the pipeline first.</p>
           </div>
           <div class="button-row" style="margin-top:14px;">
-            <a href="/app/actions/test-ingest"><button class="btn" type="button">Smoke ingest (100 recent)</button></a>
+            <a href="/app/actions/test-ingest"><button class="btn" type="button" id="startup-smoke-ingest">Smoke ingest (100 recent)</button></a>
           </div>
+        </section>
+        <section class="card section">
+          <div class="section-header">
+            <h2>4. Unlock Literoom</h2>
+            <p>When the smoke ingest finishes successfully, the rest of the app opens up.</p>
+          </div>
+          <div class="asset-meta">Other pages stay locked until the onboarding smoke test is complete.</div>
         </section>
         <section class="system-top" style="margin-top:24px;">
           <section class="system-card"><h3>Library</h3><div class="big">{overview.get('assets_total', 0)}</div><div class="asset-meta">items ready to browse</div></section>
@@ -3841,13 +3864,16 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             const libraryField = document.getElementById('startup-managed_library_dir_value');
             const libraryLabel = document.getElementById('startup-chosen-library-folder');
             const form = document.getElementById('startup-settings-form');
+            const saveButton = document.getElementById('startup-save-folders');
+            const inspectButton = document.getElementById('startup-inspect-imports');
+            const smokeButton = document.getElementById('startup-smoke-ingest');
             if (!chooser || !libraryChooser || !field || !label || !libraryField || !libraryLabel || !form) return;
-            const prettyPath = (folderName) => {
-              const root = (workspaceRoot && workspaceRoot.value ? workspaceRoot.value : '').replace(/\\/+$/, '');
-              const clean = String(folderName || '').replace(/^\\/+/, '');
-              if (!clean) return root;
-              if (!root) return clean;
-              return `${root}/${clean}`;
+            const updateControls = () => {
+              const hasImport = Boolean(String(field.value || '').trim());
+              const hasLibrary = Boolean(String(libraryField.value || '').trim());
+              if (saveButton) saveButton.disabled = !(hasImport || hasLibrary);
+              if (inspectButton) inspectButton.disabled = !(hasImport && hasLibrary);
+              if (smokeButton) smokeButton.disabled = !(hasImport && hasLibrary);
             };
             const pickDirectory = async (fallbackName) => {
               if (window.showDirectoryPicker) {
@@ -3858,9 +3884,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             };
             if (workspaceRoot) {
               workspaceRoot.addEventListener('change', function() {
-                label.textContent = prettyPath(field.value || 'imports');
-                libraryLabel.textContent = prettyPath(libraryField.value || 'library');
-                form.requestSubmit();
+                updateControls();
               });
             }
             chooser.addEventListener('click', async function() {
@@ -3868,7 +3892,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 const selected = await pickDirectory('imports');
                 if (!selected) return;
                 field.value = selected;
-                label.textContent = prettyPath(selected);
+                label.textContent = selected;
+                updateControls();
                 form.submit();
               } catch (error) {
                 console.error(error);
@@ -3879,12 +3904,14 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 const selected = await pickDirectory('library');
                 if (!selected) return;
                 libraryField.value = selected;
-                libraryLabel.textContent = prettyPath(selected);
+                libraryLabel.textContent = selected;
+                updateControls();
                 form.submit();
               } catch (error) {
                 console.error(error);
               }
             });
+            updateControls();
           })();
         </script>
         """
@@ -3905,6 +3932,19 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 limit=limit,
                 sample_recent=sample_recent,
             )
+            if sample_recent and not current_config.onboarding_complete:
+                finished_config = AppConfig(
+                    workspace_root=current_config.workspace_root,
+                    sources=current_config.sources,
+                    startup_import_ready=current_config.startup_import_ready,
+                    startup_library_ready=current_config.startup_library_ready,
+                    onboarding_complete=True,
+                    paths=current_config.paths,
+                    tools=current_config.tools,
+                    pipeline=current_config.pipeline,
+                    thresholds=current_config.thresholds,
+                )
+                save_config(finished_config, config_path)
             auto_sync_state["last_result"] = result
             auto_sync_state["last_run_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         except Exception as exc:  # pragma: no cover
@@ -3971,6 +4011,21 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             ),
         )
     app = FastAPI(title="Literoom", version=APP_VERSION)
+
+    @app.middleware("http")
+    async def _lock_until_onboarding_complete(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/app/"):
+            allowed = (
+                path.startswith("/app/startup")
+                or path == "/app/actions/analyze-imports"
+                or path == "/app/actions/test-ingest"
+            )
+            if not allowed:
+                current_config, _resolved, _db_path, _managed = _current_config()
+                if not current_config.onboarding_complete:
+                    return RedirectResponse(url="/app/startup/workflow", status_code=303)
+        return await call_next(request)
 
     @app.get("/healthz")
     def healthz():
@@ -4326,6 +4381,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             updated = AppConfig(
                 workspace_root=current_config.workspace_root,
                 sources=current_config.sources,
+                startup_import_ready=current_config.startup_import_ready,
+                startup_library_ready=current_config.startup_library_ready,
+                onboarding_complete=current_config.onboarding_complete,
                 paths=current_config.paths,
                 tools=current_config.tools,
                 pipeline=current_config.pipeline.__class__(
@@ -4343,12 +4401,15 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
             state = "enabled" if updated.pipeline.auto_sync_enabled else "disabled"
             return RedirectResponse(url=f"/?message=Auto+Sync+{state}", status_code=303)
         if action_name in {"run-now", "test-ingest", "analyze-imports"}:
+            if not current_config.onboarding_complete and action_name == "run-now":
+                return RedirectResponse(url="/app/startup/workflow?message=Complete+startup+first", status_code=303)
             if not current_config.resolved_sources(resolved):
                 job_name = "ingest" if action_name in {"run-now", "test-ingest"} else "source_analysis"
                 job_id = manifest.create_job(db_path, job_name, {"sources": [], "limit": limit})
                 manifest.start_job(db_path, job_id)
                 manifest.fail_job(db_path, job_id, "No ingest sources configured.", retryable=False, metrics={"sources": []})
-                return RedirectResponse(url="/app/system?message=No+ingest+sources+configured", status_code=303)
+                target = "/app/startup/workflow" if not current_config.onboarding_complete else "/app/system"
+                return RedirectResponse(url=f"{target}?message=No+ingest+sources+configured", status_code=303)
             effective_limit = 100 if action_name == "test-ingest" and limit is None else limit
             if action_name in {"run-now", "test-ingest"}:
                 job_id = manifest.create_job(
@@ -4362,7 +4423,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     lambda: _run_ingest_background(job_id, limit=effective_limit, sample_recent=(action_name == "test-ingest")),
                 )
                 note = "Started+smoke+ingest" if action_name == "test-ingest" else "Started+ingest+run"
-                return RedirectResponse(url=f"/app/system?message={note}", status_code=303)
+                target = "/app/startup/workflow" if not current_config.onboarding_complete else "/app/system"
+                return RedirectResponse(url=f"{target}?message={note}", status_code=303)
             job_id = manifest.create_job(
                 db_path,
                 "source_analysis",
@@ -4373,7 +4435,8 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 action_name,
                 lambda: _run_source_analysis_background(job_id, limit=effective_limit),
             )
-            return RedirectResponse(url="/app/system?message=Started+import+analysis", status_code=303)
+            target = "/app/startup/workflow" if not current_config.onboarding_complete else "/app/system"
+            return RedirectResponse(url=f"{target}?message=Started+import+analysis", status_code=303)
         if action_name == "detect-faces":
             _start_background(action_name)
             return RedirectResponse(url="/app/system?message=Started+face+detection+batch+refresh", status_code=303)
@@ -4415,6 +4478,9 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         updated = AppConfig(
             workspace_root=workspace_root.strip() or ".",
             sources=sources,
+            startup_import_ready=current_config.startup_import_ready or bool(sources),
+            startup_library_ready=current_config.startup_library_ready or bool(managed_library_dir_value.strip()),
+            onboarding_complete=current_config.onboarding_complete,
             paths=current_config.paths.__class__(
                 db_path=db_path_value.strip() or current_config.paths.db_path,
                 managed_library_dir=library_dir,
@@ -4441,6 +4507,62 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
         )
         save_config(updated, config_path)
         return RedirectResponse(url="/app/system?message=Settings+saved", status_code=303)
+
+    @app.get("/app/startup/save")
+    def save_startup_settings(
+        workspace_root: str,
+        sources_text: str = "",
+        db_path_value: str = "",
+        managed_library_dir_value: str = "",
+        derivatives_dir_value: str = "",
+        logs_dir_value: str = "",
+        temp_dir_value: str = "",
+        batch_size: int = 500,
+        image_thumbnail_size: int = 512,
+        video_preview_offset_seconds: int = 1,
+        managed_naming: str = "{YYYY}/{YYYY-MM}/{YYYYMMDD}_{hhmmss}_{shortid}",
+        exiftool: str = "",
+        ffmpeg: str = "",
+        auto_sync_interval_seconds: int = 300,
+    ):
+        current_config, _resolved, _db_path, _managed = _current_config()
+        sources = [line.strip() for line in sources_text.splitlines() if line.strip()]
+        import_ready = current_config.startup_import_ready or bool(sources)
+        library_ready = current_config.startup_library_ready or bool(managed_library_dir_value.strip())
+        library_dir = managed_library_dir_value.strip() or current_config.paths.managed_library_dir
+        previews_dir = derivatives_dir_value.strip() or current_config.paths.derivatives_dir
+        updated = AppConfig(
+            workspace_root=workspace_root.strip() or ".",
+            sources=sources,
+            startup_import_ready=import_ready,
+            startup_library_ready=library_ready,
+            onboarding_complete=current_config.onboarding_complete,
+            paths=current_config.paths.__class__(
+                db_path=db_path_value.strip() or current_config.paths.db_path,
+                managed_library_dir=library_dir,
+                derivatives_dir=previews_dir,
+                logs_dir=logs_dir_value.strip() or current_config.paths.logs_dir,
+                temp_dir=temp_dir_value.strip() or current_config.paths.temp_dir,
+            ),
+            tools=current_config.tools.__class__(
+                exiftool=exiftool.strip() or None,
+                ffmpeg=ffmpeg.strip() or None,
+                clip_model=current_config.tools.clip_model,
+                face_model=current_config.tools.face_model,
+            ),
+            pipeline=current_config.pipeline.__class__(
+                batch_size=batch_size,
+                max_workers=current_config.pipeline.max_workers,
+                image_thumbnail_size=image_thumbnail_size,
+                video_preview_offset_seconds=video_preview_offset_seconds,
+                managed_naming=managed_naming.strip() or current_config.pipeline.managed_naming,
+                auto_sync_enabled=False,
+                auto_sync_interval_seconds=max(30, auto_sync_interval_seconds),
+            ),
+            thresholds=current_config.thresholds,
+        )
+        save_config(updated, config_path)
+        return RedirectResponse(url="/app/startup/workflow?message=Folder+choices+saved", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(message: Optional[str] = None):

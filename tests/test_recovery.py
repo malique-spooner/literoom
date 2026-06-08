@@ -65,15 +65,21 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(manifest.list_jobs(db_path), [])
             loaded, _ = load_config(config_path)
             self.assertEqual(loaded.sources, [])
+            self.assertFalse(loaded.onboarding_complete)
             self.assertTrue(import_dir.exists())
             page = client.get("/app/startup/workflow")
             self.assertIn("Welcome to Literoom", page.text)
             self.assertIn("Pick the import and library folders", page.text)
+            self.assertIn("No import folder selected", page.text)
+            self.assertIn("No library folder selected", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
             self.assertIn("Inspect imports", page.text)
             self.assertIn("Smoke ingest (100 recent)", page.text)
             self.assertNotIn("Run full ingest", page.text)
+            locked_page = client.get("/app/system")
+            self.assertEqual(locked_page.status_code, 200)
+            self.assertIn("Welcome to Literoom", locked_page.text)
 
 
 if __name__ == "__main__":
