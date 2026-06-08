@@ -111,7 +111,6 @@ class DedupeTests(unittest.TestCase):
             self.assertIn("Choose your folders to begin", page.text)
             self.assertIn("Select import folder", page.text)
             self.assertIn("Select library folder", page.text)
-            self.assertIn("folder picker", page.text)
             self.assertNotIn('type="file"', page.text)
             self.assertNotIn("webkitdirectory", page.text)
             if DEFAULT_WORKSPACE_ROOT.exists():

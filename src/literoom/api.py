@@ -3560,7 +3560,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
           <section class="card section">
             <div class="section-header">
               <h2>Workspace</h2>
-              <p>Choose the workspace, then pick the import and library folders. Literoom reads the folders locally, it does not upload anything.</p>
             </div>
             <form method="get" action="/app/settings/save" id="settings-form" data-auto-submit="true">
               <input type="hidden" name="workspace_root" id="workspace-root-input" value="{escape(workspace_root_value)}">
@@ -3577,7 +3576,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     <button class="btn secondary" type="button" id="choose-import-folder">Select import folder…</button>
                   </div>
                   <div class="asset-meta" id="chosen-import-folder" style="font-size:.92rem;">{escape(import_dir_value)}</div>
-                  <div class="asset-meta">This opens your browser's folder picker. Nothing is uploaded.</div>
                 </div>
               </label>
               <label class="field" style="grid-column:1 / -1; margin-top:8px;">
@@ -3587,7 +3585,6 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                     <button class="btn secondary" type="button" id="choose-library-folder">Select library folder…</button>
                   </div>
                   <div class="asset-meta" id="chosen-library-folder" style="font-size:.92rem;">{escape(managed_library_dir_value)}</div>
-                  <div class="asset-meta">This also stays local to your Mac.</div>
                 </div>
               </label>
             </form>
