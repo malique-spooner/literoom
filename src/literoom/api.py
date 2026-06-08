@@ -2238,7 +2238,7 @@ def _page(title: str, body: str, *, history_html: str = "", body_class: str = ""
             }});
           }};
           const refreshProgress = () => {{
-            fetch('/progress', {{ headers: {{ 'Accept': 'application/json' }} }})
+            fetch(`/progress?ts=${{Date.now()}}`, {{ headers: {{ 'Accept': 'application/json' }}, cache: 'no-store' }})
               .then((response) => response.ok ? response.json() : null)
               .then((payload) => {{
                 if (payload) renderProgress(payload);
@@ -2295,7 +2295,7 @@ def _live_progress_snapshot(db_path: Path) -> dict:
             job
             for job in jobs
             if str(job.get("status") or "") in {"QUEUED", "RUNNING"}
-            and str(job.get("job_type") or "") in {"ingest", "build_library", "build_derivatives", "metadata_repair"}
+            and str(job.get("job_type") or "") in {"ingest", "build_library", "build_derivatives", "metadata_repair", "source_analysis"}
         ),
         None,
     )

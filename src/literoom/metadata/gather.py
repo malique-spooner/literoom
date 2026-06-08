@@ -1052,6 +1052,20 @@ def run(
 
     collected_rows: List[Dict[str, Any]] = []
 
+    def _recent_row_score(row: Dict[str, Any]) -> tuple[float, str]:
+        stamp_text = str(row.get("src_mtime") or row.get("dt_original") or "").strip()
+        score = 0.0
+        if stamp_text:
+            try:
+                parsed = datetime.fromisoformat(stamp_text)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                score = parsed.timestamp()
+            except Exception:
+                score = 0.0
+        locator = str(row.get("source_locator") or row.get("zip_path") or row.get("orig_filename") or "")
+        return score, locator
+
     for item in paths:
         if limit is not None and not sample_recent and total >= limit:
             break
@@ -1087,12 +1101,7 @@ def run(
                     if limit is not None and total >= limit:
                         break
     if sample_recent and limit is not None:
-        def _recent_sort_key(row: Dict[str, Any]) -> tuple[str, str]:
-            stamp = str(row.get("src_mtime") or row.get("dt_original") or "")
-            locator = str(row.get("source_locator") or row.get("zip_path") or row.get("orig_filename") or "")
-            return (stamp, locator)
-
-        collected_rows.sort(key=_recent_sort_key, reverse=True)
+        collected_rows.sort(key=_recent_row_score, reverse=True)
         for row in collected_rows[:limit]:
             batch.append(row)
             if len(batch) >= batch_size:
