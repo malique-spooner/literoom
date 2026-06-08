@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+import zipfile
 
 from PIL import Image
 
@@ -387,6 +388,95 @@ class ReviewUiTests(unittest.TestCase):
             self.assertEqual(poster_page.status_code, 200)
             self.assertLess(elapsed, 5.0, f"Asset click and poster load took too long: {elapsed:.2f}s")
             self.assertIn("/poster/", asset_page.text)
+
+    def test_poster_falls_back_to_source_locator_when_managed_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            managed.mkdir()
+            derived.mkdir()
+            manifest.init_db(db_path)
+
+            source = root / "fallback.jpg"
+            Image.new("RGB", (1024, 768), color="steelblue").save(source, quality=92)
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "local",
+                        "abs_zip": str(source),
+                        "zip_path": source.name,
+                        "source_kind": "file",
+                        "source_locator": str(source),
+                        "source_path": source.name,
+                        "media_type": "image",
+                        "orig_filename": source.name,
+                        "orig_ext": ".jpg",
+                        "orig_size": source.stat().st_size,
+                        "dt_original": "2024-03-01T12:00:00",
+                        "src_mtime": "2024-03-01T12:00:00",
+                    }
+                ],
+                db_path,
+            )
+            manifest.plan_targets(db_path)
+            asset = manifest.list_assets(db_path, limit=5)[0]
+
+            config_path = root / "config.yaml"
+            self._write_config(config_path, db_path, managed, derived, root)
+            client = TestClient(create_app(config_path))
+
+            poster_page = client.get(f"/poster/{asset['id']}")
+            self.assertEqual(poster_page.status_code, 200)
+            self.assertEqual(poster_page.headers.get("cache-control"), "public, max-age=86400, immutable")
+
+    def test_poster_builds_from_zip_source_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "manifest.sqlite"
+            managed = root / "library"
+            derived = root / "derived"
+            managed.mkdir()
+            derived.mkdir()
+            manifest.init_db(db_path)
+
+            source_img = root / "zip-source.jpg"
+            Image.new("RGB", (1280, 960), color="royalblue").save(source_img, quality=92)
+            zip_path = root / "imports.zip"
+            inner_name = "photos/zip-source.jpg"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.write(source_img, inner_name)
+
+            manifest.upsert_raw(
+                [
+                    {
+                        "source": "zip",
+                        "abs_zip": str(zip_path),
+                        "zip_path": inner_name,
+                        "source_kind": "zip",
+                        "source_locator": str(zip_path),
+                        "source_path": inner_name,
+                        "media_type": "image",
+                        "orig_filename": "zip-source.jpg",
+                        "orig_ext": ".jpg",
+                        "orig_size": source_img.stat().st_size,
+                        "dt_original": "2024-03-02T12:00:00",
+                        "src_mtime": "2024-03-02T12:00:00",
+                    }
+                ],
+                db_path,
+            )
+            manifest.plan_targets(db_path)
+            asset = manifest.list_assets(db_path, limit=5)[0]
+
+            config_path = root / "config.yaml"
+            self._write_config(config_path, db_path, managed, derived, root)
+            client = TestClient(create_app(config_path))
+
+            poster_page = client.get(f"/poster/{asset['id']}")
+            self.assertEqual(poster_page.status_code, 200)
+            self.assertEqual(poster_page.headers.get("content-type"), "image/jpeg")
 
     def test_people_page_shows_clustered_identities_on_landing_grid(self):
         with tempfile.TemporaryDirectory() as tmp:

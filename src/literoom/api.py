@@ -12,6 +12,8 @@ import mimetypes
 import shutil
 import sys
 import threading
+import tempfile
+import zipfile
 from urllib.parse import quote_plus
 
 from PIL import Image
@@ -2953,6 +2955,30 @@ def _safe_thumbnail_path(derivatives_dir: Path, asset_id: str, kind: str) -> Pat
     return derivatives_dir / kind / f"{asset_id}.jpg"
 
 
+def _build_thumbnail_from_zip_member(zip_path: Path, inner_path: str, dest: Path, size: int) -> tuple[int, int]:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    suffix = Path(inner_path).suffix or ".bin"
+    tmp_path = None
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            with archive.open(inner_path, "r") as src, tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                shutil.copyfileobj(src, tmp)
+                tmp_path = Path(tmp.name)
+        if not tmp_path:
+            raise FileNotFoundError(inner_path)
+        with Image.open(tmp_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((size, size))
+            img.save(dest, format="JPEG", quality=90)
+            return img.width, img.height
+    finally:
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
 def _resolve_poster_path(
     db_path: Path,
     derivatives_dir: Path,
@@ -2969,6 +2995,26 @@ def _resolve_poster_path(
         candidate = _safe_thumbnail_path(derivatives_dir, asset_id, "video_preview")
         if candidate.exists():
             return candidate, item
+        managed_rel = item.get("managed_path")
+        if managed_rel:
+            managed_file = managed_library_dir / str(managed_rel)
+            if managed_file.exists():
+                try:
+                    width, height = _build_image_thumbnail(managed_file, candidate, 320)
+                    manifest.record_thumbnail(db_path, asset_id, "video_preview", str(candidate), "READY", width=width, height=height)
+                    return candidate, item
+                except Exception:
+                    return None, item
+        source_locator = item.get("source_locator")
+        if source_locator:
+            source_file = Path(str(source_locator))
+            if source_file.exists():
+                try:
+                    width, height = _build_image_thumbnail(source_file, candidate, 320)
+                    manifest.record_thumbnail(db_path, asset_id, "video_preview", str(candidate), "READY", width=width, height=height)
+                    return candidate, item
+                except Exception:
+                    return None, item
         return None, item
     candidate = _safe_thumbnail_path(derivatives_dir, asset_id, "primary")
     if candidate.exists():
@@ -2983,7 +3029,25 @@ def _resolve_poster_path(
                 return candidate, item
             except Exception:
                 return None, item
-        return None, item
+    source_locator = item.get("source_locator")
+    if source_locator:
+        source_file = Path(str(source_locator))
+        if source_file.exists():
+            try:
+                width, height = _build_image_thumbnail(source_file, candidate, 320)
+                manifest.record_thumbnail(db_path, asset_id, "primary", str(candidate), "READY", width=width, height=height)
+                return candidate, item
+            except Exception:
+                pass
+        if item.get("source_kind") == "zip":
+            source_path = str(item.get("source_path") or "")
+            if source_path:
+                try:
+                    width, height = _build_thumbnail_from_zip_member(source_file, source_path, candidate, 320)
+                    manifest.record_thumbnail(db_path, asset_id, "primary", str(candidate), "READY", width=width, height=height)
+                    return candidate, item
+                except Exception:
+                    return None, item
     return None, item
 
 
@@ -4057,12 +4121,13 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
               const active = payload && payload.active_job ? payload.active_job : null;
               const jobs = payload && payload.jobs ? payload.jobs : [];
               const onboardingComplete = Boolean(payload && payload.onboarding_complete);
+              const jobStatus = (job) => String((job && job.status) || '').toUpperCase();
               const analysisJob = latestMatchingJob(jobs, 'source_analysis');
               const smokeJob = latestMatchingJob(jobs, 'ingest', (job) => {
                 const metrics = parseMetrics(job && job.metrics_json);
-                return Boolean(metrics.sample_recent || Number(metrics.limit || 0) === 100);
+                const status = jobStatus(job);
+                return Boolean(metrics.sample_recent || Number(metrics.limit || 0) === 100 || status.startsWith('COMPLET'));
               });
-              const jobStatus = (job) => String((job && job.status) || '').toUpperCase();
               startupStepWidgets.forEach((widget) => {
                 const role = widget.dataset.startupRole || '';
                 const fill = widget.querySelector('[data-startup-step-fill]');

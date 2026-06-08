@@ -106,6 +106,8 @@ def run_ingest(
                 "malformed_sources": malformed_sources,
                 "source_issues": source_issues,
                 "snapchat_sequence_groups": snapchat_sequence_groups,
+                "limit": limit,
+                "sample_recent": bool(sample_recent),
             },
         )
     except Exception as exc:
