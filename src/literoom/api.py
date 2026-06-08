@@ -2984,6 +2984,7 @@ def _resolve_poster_path(
             except Exception:
                 return None, item
         return None, item
+    return None, item
 
 
 def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
@@ -4061,6 +4062,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 const metrics = parseMetrics(job && job.metrics_json);
                 return Boolean(metrics.sample_recent || Number(metrics.limit || 0) === 100);
               });
+              const jobStatus = (job) => String((job && job.status) || '').toUpperCase();
               startupStepWidgets.forEach((widget) => {
                 const role = widget.dataset.startupRole || '';
                 const fill = widget.querySelector('[data-startup-step-fill]');
@@ -4070,7 +4072,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                 let width = '0%';
                 if (role === 'analysis') {
                   const isActive = active && String(active.job_type || '') === 'source_analysis';
-                  const isComplete = analysisJob && String(analysisJob.status || '').toUpperCase() === 'COMPLETE';
+                  const isComplete = analysisJob && jobStatus(analysisJob).startsWith('COMPLET');
                   const metrics = parseMetrics(analysisJob && analysisJob.metrics_json);
                   const activeMetrics = parseMetrics(active && active.metrics_json);
                   if (isComplete) {
@@ -4086,7 +4088,7 @@ def create_app(config_path: Path | str = DEFAULT_CONFIG_PATH) -> FastAPI:
                   const activeMetrics = parseMetrics(active && active.metrics_json);
                   const smokeMetrics = parseMetrics(smokeJob && smokeJob.metrics_json);
                   const isActive = active && String(active.job_type || '') === 'ingest' && (activeMetrics.sample_recent || Number(activeMetrics.limit || 0) === 100);
-                  const isComplete = smokeJob && String(smokeJob.status || '').toUpperCase() === 'COMPLETE';
+                  const isComplete = smokeJob && jobStatus(smokeJob).startsWith('COMPLET');
                   const metrics = (isActive && activeMetrics) || (isComplete && smokeMetrics) || {};
                   const done = Number(metrics.processed_assets || 0);
                   const total = 100;
